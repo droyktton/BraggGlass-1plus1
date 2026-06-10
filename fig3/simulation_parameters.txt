@@ -1,0 +1,11 @@
+Grid Size: 32 x 512
+Time Steps: 1000000
+cx, cy: 1, 1
+V0: 0.1
+dt: 0.01
+kBT: 0.5
+noise_scale: 0.1
+rf: 100
+seed: 1234
+Disorder: Piecewise-constant pinning
+Exclusion: Hardcore

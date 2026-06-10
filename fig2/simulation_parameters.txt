@@ -1,0 +1,11 @@
+Simulation Parameters:
+Grid Size: 32 x 512
+Time Steps: 1000000
+Elastic Constants: cx = 1, cy = 1
+Pinning Strength: V0 = 0.1
+Time Step: dt = 0.01
+Thermal Noise Scale: 0.1 (kBT = 0.5)
+Disorder Type: Pure Sinusoidal Pinning
+Correlation Length of Disorder (rf): 10
+Exclusion Type: Hardcore with 0.4 minimum spacing
+Random Seed: 1243
