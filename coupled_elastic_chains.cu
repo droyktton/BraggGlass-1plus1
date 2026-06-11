@@ -554,24 +554,16 @@ int main(int argc, char* argv[]) {
 #endif
 
     // ── Build the physical system ─────────────────────────────────────────────
-    CoupledElasticChains system(p);
-
-
-    /* // first test with one replica to make sure everything works, then we can easily extend to multiple replicas for parallel tempering by just adding more instances to this vector.
-    std::vector<CoupledElasticChains*> replicas;
-    replicas.push_back(&system); // For now we just run one replica, but this design allows easy extension to multiple replicas for parallel tempering.
-    */
-
-
+    // CoupledElasticChains system(p);
     //#####################################################################################
     // second test with multiple replicas to make sure our memory management is robust and we can easily extend to parallel tempering.
-    int n_replicas = 8; // Define how many replicas you want in your temperature ladder    
+    int n_replicas = 2; // Define how many replicas you want in your temperature ladder    
     // 1. Change your vector to hold unique_ptrs instead of dangerous raw pointers
     std::vector<std::unique_ptr<CoupledElasticChains>> replicas;
     // Optimization: Reserve memory upfront to avoid vector reallocation overhead
     replicas.reserve(n_replicas);
-    double T_min = 0.1; // Minimum temperature for the ladder
-    double T_max = 1.0; // Maximum temperature for the ladder
+    double T_min = 0.01; // Minimum temperature for the ladder
+    double T_max = p.kBT; // Maximum temperature for the ladder
     double delta_T = (T_max - T_min) / (n_replicas - 1); // Temperature step size for a linear ladder. For geometric, use T_i = T_min * (T_max / T_min)^(i / (n_replicas - 1))
     // 2. Populate the ladder
     for (int i = 0; i < n_replicas; ++i) {
@@ -590,19 +582,21 @@ int main(int argc, char* argv[]) {
     //#####################################################################################
 
 
-    std::cout << "Noise scale: " << system.noiseScale() << "\n";
+    //std::cout << "Noise scale: " << system.noiseScale() << "\n";
     std::cout << "Running simulation...\n";
 
     // ── Main loop ─────────────────────────────────────────────────────────────
     for (int step = 0; step < n_steps; ++step) {
-        system.step();
+        //system.step();
+        replicas[0]->step(); // For now we just run one replica, but this design allows easy extension to multiple replicas for parallel tempering.
         if (step % 1000 == 0)
             std::cout << "Step " << step << " / " << n_steps << "\n";
     }
 
     // ── Copy result to host & analyse ─────────────────────────────────────────
     std::vector<double> h_u;
-    system.copyToHost(h_u);
+    //system.copyToHost(h_u);
+    replicas[0]->copyToHost(h_u); // For now we just run one replica, but this design allows easy extension to multiple replicas for parallel tempering.
 
     // Save parameters file
     std::ofstream param_file("simulation_parameters.txt");
@@ -612,7 +606,6 @@ int main(int argc, char* argv[]) {
                << "V0: "           << p.V0 << "\n"
                << "dt: "           << p.dt << "\n"
                << "kBT: "          << p.kBT << "\n"
-               << "noise_scale: "  << system.noiseScale() << "\n"
                << "rf: "           << p.rf << "\n"
                << "seedT: "         << p.seedT << "\n"
                << "seedD: "         << p.seedD << "\n";
