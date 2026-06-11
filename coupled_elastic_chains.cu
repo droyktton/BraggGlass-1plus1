@@ -557,8 +557,7 @@ int main(int argc, char* argv[]) {
 
     // ── Build the physical system ─────────────────────────────────────────────
     // CoupledElasticChains system(p);
-    //#####################################################################################
-    // second test with multiple replicas to make sure our memory management is robust and we can easily extend to parallel tempering.
+
     int n_replicas = 2; // Define how many replicas you want in your temperature ladder    
     // 1. Change your vector to hold unique_ptrs instead of dangerous raw pointers
     std::vector<std::unique_ptr<CoupledElasticChains>> replicas;
@@ -581,7 +580,6 @@ int main(int argc, char* argv[]) {
         // std::make_unique perfectly forwards these arguments to the CoupledElasticChains constructor
         replicas.push_back(std::make_unique<CoupledElasticChains>(p));
     }
-    //#####################################################################################
 
 
     //std::cout << "Noise scale: " << system.noiseScale() << "\n";
@@ -591,6 +589,7 @@ int main(int argc, char* argv[]) {
     for (int step = 0; step < n_steps; ++step) {
         //system.step();
         replicas[0]->step(); // For now we just run one replica, but this design allows easy extension to multiple replicas for parallel tempering.
+        replicas[1]->step(); // For now we just run one replica, but this design allows easy extension to multiple replicas for parallel tempering.
         if (step % 1000 == 0)
             std::cout << "Step " << step << " / " << n_steps << "\n";
     }
