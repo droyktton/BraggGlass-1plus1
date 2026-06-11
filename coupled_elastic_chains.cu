@@ -9,6 +9,11 @@
 #include <complex>
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
+#include <thrust/device_ptr.h>
+#include <thrust/reduce.h>
+#include <thrust/device_vector.h>
+#include <thrust/host_vector.h>
+
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846f
@@ -28,15 +33,15 @@
 
 #define PHILOX_OFFSET 10000000
 
-__device__ float get_piecewise_pinning_force(unsigned int idx, unsigned int u_block,
-                                              float V0, unsigned int seed) {
+__device__ double get_piecewise_pinning_force(unsigned int idx, unsigned int u_block,
+                                              double V0, unsigned int seed) {
     curandStatePhilox4_32_10_t state;
     curand_init(seed, idx, u_block, &state);
     return -V0 + 2.0f * V0 * curand_uniform(&state);
 }
 
-__device__ float quenched_random_force(unsigned int x, unsigned int y,
-                                        float V0, unsigned int seed) {
+__device__ double quenched_random_force(unsigned int x, unsigned int y,
+                                        double V0, unsigned int seed) {
     curandStatePhilox4_32_10_t state;
     curand_init(seed, y, x, &state);
     return -V0 + 2.0f * V0 * curand_uniform(&state);
@@ -45,25 +50,25 @@ __device__ float quenched_random_force(unsigned int x, unsigned int y,
 // ─────────────────────────────── KERNELS ─────────────────────────────────────
 
 __global__ void init_rand_kernel(curandState* rand_states, int Nx, int Ny,
-                                  unsigned long long seed) {
+                                  unsigned long long seedT) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x < Nx && y < Ny) {
         int idx = x * Ny + y;
-        curand_init(42ULL, idx, 0, &rand_states[idx]);
+        curand_init(seedT, idx, 0, &rand_states[idx]);
     }
 }
 
 __global__ void update_displacements_thermal_kernel(
-        const float* __restrict__ d_u,
-        float*       __restrict__ d_u_next,
-        const float* __restrict__ d_phi,
+        const double* __restrict__ d_u,
+        double*       __restrict__ d_u_next,
+        const double* __restrict__ d_phi,
         curandState* rand_states,
-        unsigned int seed,
+        unsigned int seedD,
         int Nx, int Ny,
-        float cx, float cy,
-        float V0, float rf,
-        float dt, float noise_scale) {
+        double cx, double cy,
+        double V0, double rf,
+        double dt, double noise_scale) {
 
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -77,37 +82,37 @@ __global__ void update_displacements_thermal_kernel(
         int up_y    = (y - 1 + Ny) % Ny;
         int down_y  = (y + 1) % Ny;
 
-        float u_curr  = d_u[idx];
-        float u_left  = d_u[left_x  * Ny + y];
-        float u_right = d_u[right_x * Ny + y];
-        float u_up    = d_u[x * Ny + up_y];
-        float u_down  = d_u[x * Ny + down_y];
+        double u_curr  = d_u[idx];
+        double u_left  = d_u[left_x  * Ny + y];
+        double u_right = d_u[right_x * Ny + y];
+        double u_up    = d_u[x * Ny + up_y];
+        double u_down  = d_u[x * Ny + down_y];
 
         // 1. Elastic force
-        float f_elastic = cx * (u_left + u_right - 2.0f * u_curr)
+        double f_elastic = cx * (u_left + u_right - 2.0f * u_curr)
                         + cy * (u_up   + u_down  - 2.0f * u_curr);
 
         // 2. Pinning force
-        int u_block_signed      = __float2int_rd((static_cast<float>(x) + u_curr) / rf);
+        int u_block_signed      = __double2int_rd((static_cast<double>(x) + u_curr) / rf);
         unsigned int u_block_ph = (unsigned int)(u_block_signed + PHILOX_OFFSET);
 
 #ifndef LARKIN
-        float f_pinning = get_piecewise_pinning_force(y, u_block_ph, V0, seed);
+        double f_pinning = get_piecewise_pinning_force(y, u_block_ph, V0, seedD);
 #else
-        float f_pinning = quenched_random_force(x, y, V0, seed);
+        double f_pinning = quenched_random_force(x, y, V0, seedD);
 #endif
 
         // 3. Thermal noise (Gaussian via cuRAND)
         curandState local_state = rand_states[idx];
-        float gaussian_noise    = curand_normal(&local_state);
+        double gaussian_noise    = curand_normal(&local_state);
         rand_states[idx]        = local_state;
 
         // 4. Langevin update
-        float u_prop = u_curr + dt * (f_elastic + f_pinning) + noise_scale * gaussian_noise;
+        double u_prop = u_curr + dt * (f_elastic + f_pinning) + noise_scale * gaussian_noise;
 
 #ifdef HARDCORE
-        float max_desplazamiento_izq = u_prop - u_left;
-        float max_desplazamiento_der = u_right - u_prop;
+        double max_desplazamiento_izq = u_prop - u_left;
+        double max_desplazamiento_der = u_right - u_prop;
         if (max_desplazamiento_izq < -0.9f) u_prop = u_left  - 0.9f;
         if (max_desplazamiento_der >  0.9f) u_prop = u_right - 0.9f;
 #endif
@@ -116,18 +121,71 @@ __global__ void update_displacements_thermal_kernel(
     }
 }
 
+__global__ void compute_configurational_energy_kernel(
+        const double* __restrict__ d_u,
+        unsigned int seedD,
+        int Nx, int Ny,
+        double cx, double cy,
+        double V0, double rf,
+        double* __restrict__ d_local_energies) {
+
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (x < Nx && y < Ny) {
+        int idx = x * Ny + y;
+
+        // Forward neighbors for periodic boundary conditions to avoid double-counting bonds
+        int right_x = (x + 1) % Nx;
+        int down_y  = (y + 1) % Ny;
+
+        double u_curr  = d_u[idx];
+        double u_right = d_u[right_x * Ny + y];
+        double u_down  = d_u[x * Ny + down_y];
+
+        // 1. Forward Elastic Energy (1/2 * k * dx^2)
+        double e_elastic = 0.5 * double(cx) * (u_right - u_curr) * (u_right - u_curr)
+                         + 0.5 * double(cy) * (u_down  - u_curr) * (u_down  - u_curr);
+
+        // 2. Pinning Potential Energy
+        double e_pinning = 0.0;
+
+#ifndef LARKIN
+        // Piecewise-constant force means the potential energy is piecewise-linear.
+        // To compute this exactly, we integrate the force. 
+        // If your cells are highly rugged, a highly reliable standard practice 
+        // for RELD is to sample the potential via the local force work approximation:
+        int u_block_signed      = __double2int_rd((static_cast<double>(x) + u_curr) / rf);
+        unsigned int u_block_ph = (unsigned int)(u_block_signed + PHILOX_OFFSET);
+        double f_pinning = get_piecewise_pinning_force(y, u_block_ph, V0, seedD);
+        
+        // V = - integral(F du) approx -F * u
+        e_pinning = -double(f_pinning) * double(u_curr);
+#else
+        // Larkin model: independent quenched random force field. 
+        // Potential energy is purely linear work: V(u) = -f * u
+        double f_pinning = quenched_random_force(x, y, V0, seedD);
+        e_pinning = -double(f_pinning) * double(u_curr);
+#endif
+
+        // Store total local contribution as double precision to prevent truncation errors during reduction
+        d_local_energies[idx] = e_elastic + e_pinning;
+    }
+}
+
 // ──────────────────────── PHYSICAL SYSTEM CLASS ──────────────────────────────
 
 struct SimParams {
     int          Nx   = 32;
     int          Ny   = 512;
-    float        cx   = 1.0f;
-    float        cy   = 1.0f;
-    float        V0   = 0.1f;
-    float        dt   = 0.01f;
-    float        rf   = 10.0f;
-    float        kBT  = 0.5f;
-    unsigned int seed = 42u;
+    double        cx   = 1.0f;
+    double        cy   = 1.0f;
+    double        V0   = 0.1f;
+    double        dt   = 0.01f;
+    double        rf   = 10.0f;
+    double        kBT  = 0.5f;
+    unsigned int seedD = 42u;
+    unsigned int seedT = 42u;
 
     /// Load parameters from a key = value file.
     /// Lines beginning with '#' and blank lines are ignored.
@@ -161,13 +219,14 @@ struct SimParams {
             try {
                 if      (key == "Nx"  ) { int   v; ss >> v; p.Nx   = v; }
                 else if (key == "Ny"  ) { int   v; ss >> v; p.Ny   = v; }
-                else if (key == "cx"  ) { float v; ss >> v; p.cx   = v; }
-                else if (key == "cy"  ) { float v; ss >> v; p.cy   = v; }
-                else if (key == "V0"  ) { float v; ss >> v; p.V0   = v; }
-                else if (key == "dt"  ) { float v; ss >> v; p.dt   = v; }
-                else if (key == "rf"  ) { float v; ss >> v; p.rf   = v; }
-                else if (key == "kBT" ) { float v; ss >> v; p.kBT  = v; }
-                else if (key == "seed") { unsigned int v; ss >> v; p.seed = v; }
+                else if (key == "cx"  ) { double v; ss >> v; p.cx   = v; }
+                else if (key == "cy"  ) { double v; ss >> v; p.cy   = v; }
+                else if (key == "V0"  ) { double v; ss >> v; p.V0   = v; }
+                else if (key == "dt"  ) { double v; ss >> v; p.dt   = v; }
+                else if (key == "rf"  ) { double v; ss >> v; p.rf   = v; }
+                else if (key == "kBT" ) { double v; ss >> v; p.kBT  = v; }
+                else if (key == "seedD") { unsigned int v; ss >> v; p.seedD = v; }
+                else if (key == "seedT") { unsigned int v; ss >> v; p.seedT = v; }
                 else
                     throw std::runtime_error("Unknown parameter '" + key
                                              + "' on line " + std::to_string(line_no));
@@ -190,21 +249,35 @@ public:
           grid_size_(p.Nx * p.Ny),
           noise_scale_(std::sqrt(2.0f * p.kBT * p.dt))
     {
-        size_t bytes = grid_size_ * sizeof(float);
+        size_t bytes = grid_size_ * sizeof(double);
+
+        d_u_vec_.resize(grid_size_);
+        d_u_next_vec_.resize(grid_size_);
+        d_phi_vec_.resize(grid_size_);
+        d_rand_states_vec_.resize(grid_size_);
+        d_local_energies_vec_.resize(grid_size_);
+        
+        d_u_ = thrust::raw_pointer_cast(d_u_vec_.data());
+        d_u_next_ = thrust::raw_pointer_cast(d_u_next_vec_.data());
+        d_phi_ = thrust::raw_pointer_cast(d_phi_vec_.data());
+        d_rand_states_ = thrust::raw_pointer_cast(d_rand_states_vec_.data());
+        d_local_energies_ = thrust::raw_pointer_cast(d_local_energies_vec_.data());
 
         // Allocate device buffers
-        CUDA_CHECK(cudaMalloc(&d_u_,          bytes));
+        /*CUDA_CHECK(cudaMalloc(&d_u_,          bytes));
         CUDA_CHECK(cudaMalloc(&d_u_next_,     bytes));
         CUDA_CHECK(cudaMalloc(&d_phi_,        bytes));
         CUDA_CHECK(cudaMalloc(&d_rand_states_, grid_size_ * sizeof(curandState)));
+        CUDA_CHECK(cudaMalloc(&d_local_energies_, grid_size_ * sizeof(double)));
 
         // Initialise displacement field to zero on device
-        CUDA_CHECK(cudaMemset(d_u_, 0, bytes));
+        CUDA_CHECK(cudaMemset(d_u_, 0, bytes));*/
+        thrust::fill(d_u_vec_.begin(), d_u_vec_.end(), 0.0);    
 
         // Initialise random phase field on host, then copy to device
-        std::vector<float> h_phi(grid_size_);
-        std::mt19937 prng(params_.seed);
-        std::uniform_real_distribution<float> dist_phi(0.0f, 2.0f * M_PI);
+        std::vector<double> h_phi(grid_size_);
+        std::mt19937 prng(params_.seedT);
+        std::uniform_real_distribution<double> dist_phi(0.0f, 2.0f * M_PI);
         for (auto& v : h_phi) v = dist_phi(prng);
         CUDA_CHECK(cudaMemcpy(d_phi_, h_phi.data(), bytes, cudaMemcpyHostToDevice));
 
@@ -214,15 +287,16 @@ public:
                         (params_.Ny + threads_.y - 1) / threads_.y);
 
         // Initialise cuRAND states on the GPU
-        init_rand_kernel<<<blocks_, threads_>>>(d_rand_states_, params_.Nx, params_.Ny, 42ULL);
+        init_rand_kernel<<<blocks_, threads_>>>(d_rand_states_, params_.Nx, params_.Ny, p.seedT);
         CUDA_CHECK(cudaDeviceSynchronize());
     }
 
     ~CoupledElasticChains() {
-        cudaFree(d_u_);
+        /*cudaFree(d_u_);
         cudaFree(d_u_next_);
         cudaFree(d_phi_);
         cudaFree(d_rand_states_);
+        cudaFree(d_local_energies_);*/
     }
 
     // Non-copyable, non-movable (owns raw GPU pointers)
@@ -235,7 +309,7 @@ public:
     void step() {
         update_displacements_thermal_kernel<<<blocks_, threads_>>>(
             d_u_, d_u_next_, d_phi_, d_rand_states_,
-            params_.seed, params_.Nx, params_.Ny,
+            params_.seedD, params_.Nx, params_.Ny,
             params_.cx, params_.cy,
             params_.V0, params_.rf,
             params_.dt, noise_scale_
@@ -243,41 +317,91 @@ public:
         CUDA_CHECK(cudaGetLastError());
 
         // Double-buffer swap
-        float* tmp = d_u_;
+        double* tmp = d_u_;
         d_u_       = d_u_next_;
         d_u_next_  = tmp;
     }
 
     /// Copy the current displacement field from device to the provided host vector.
-    void copyToHost(std::vector<float>& h_u) const {
+    void copyToHost(std::vector<double>& h_u) const {
         h_u.resize(grid_size_);
         CUDA_CHECK(cudaMemcpy(h_u.data(), d_u_,
-                              grid_size_ * sizeof(float),
+                              grid_size_ * sizeof(double),
                               cudaMemcpyDeviceToHost));
+    }
+
+
+    double compute_configurational_energy() {
+        int Nx = params_.Nx;
+        int Ny = params_.Ny;
+
+        // 1. Setup execution grid layout
+        dim3 block(16, 16);
+        dim3 grid((Nx + 15) / 16, (Ny + 15) / 16);
+
+        // 2. Launch the energy evaluation kernel
+        compute_configurational_energy_kernel<<<grid, block>>>(
+            d_u_,                // Your current device displacement array
+            params_.seedD,       // Make sure this seedD matches your pinning configuration layout!
+            Nx, Ny,
+            params_.cx, params_.cy,
+            params_.V0, params_.rf,
+            d_local_energies_    
+        );
+        
+        // Check for kernel launch errors if debugging
+        cudaDeviceSynchronize(); 
+
+        // 3. Perform a parallel reduction directly on the GPU device using Thrust
+        thrust::device_ptr<double> dev_ptr(d_local_energies_);
+        double total_energy = thrust::reduce(dev_ptr, dev_ptr + (Nx * Ny), double(0.0), thrust::plus<double>());
+
+        return total_energy;
     }
 
     // ── Accessors ─────────────────────────────────────────────────────────────
     const SimParams& params()     const { return params_; }
-    float            noiseScale() const { return noise_scale_; }
+    double            noiseScale() const { return noise_scale_; }
     int              gridSize()   const { return grid_size_; }
+
+    // Set temperature (kBT) on-the-fly for replica exchange. 
+    // This allows us to change the target temperature of a replica without altering its current configuration, 
+    //which is essential for proper replica exchange dynamics.       
+    void set_kBT(double new_kBT) {
+        params_.kBT = new_kBT;
+        // Crucial: recalculate your thermal noise prefactor immediately
+        this->noise_scale_ = std::sqrt(2.0 * params_.dt * params_.kBT); 
+    }
+
+    double get_kBT() const {
+        return params_.kBT;
+    }
 
 private:
     SimParams    params_;
     int          grid_size_;
-    float        noise_scale_;
+    double        noise_scale_;
 
-    float*       d_u_          = nullptr;
-    float*       d_u_next_     = nullptr;
-    float*       d_phi_        = nullptr;
+    double*       d_u_          = nullptr;
+    double*       d_u_next_     = nullptr;
+    double*       d_phi_        = nullptr;
     curandState* d_rand_states_ = nullptr;
+    double*      d_local_energies_ = nullptr;
+    
+    thrust::device_vector<double> d_u_vec_; // For reduction convenience
+    thrust::device_vector<double> d_u_next_vec_; // For reduction convenience
+    thrust::device_vector<double> d_phi_vec_; // For reduction convenience
+    thrust::device_vector<curandState> d_rand_states_vec_; // For reduction convenience
+    thrust::device_vector<double> d_local_energies_vec_; // For reduction convenience
 
     dim3 threads_;
     dim3 blocks_;
 };
 
+
 // ────────────────────────── ANALYSIS FUNCTIONS ───────────────────────────────
 
-void compute_and_save_displacement_spectra(const std::vector<float>& h_u, int Nx, int Ny) {
+void compute_and_save_displacement_spectra(const std::vector<double>& h_u, int Nx, int Ny) {
     int num_modes = Ny / 2 + 1;
     std::vector<double> S_u(num_modes, 0.0);
 
@@ -305,7 +429,7 @@ void compute_and_save_displacement_spectra(const std::vector<float>& h_u, int Nx
     outfile.close();
 }
 
-void compute_and_save_structure_factor(const std::vector<float>& h_u, int Nx, int Ny) {
+void compute_and_save_structure_factor(const std::vector<double>& h_u, int Nx, int Ny) {
     int num_modes = Ny / 2 + 1;
     std::vector<double> S_avg(num_modes, 0.0);
 
@@ -334,9 +458,9 @@ void compute_and_save_structure_factor(const std::vector<float>& h_u, int Nx, in
     std::cout << "Structure factor exported to 'structure_factor_output.dat'" << std::endl;
 }
 
-void compute_and_save_correlation(const std::vector<float>& h_u, int Nx, int Ny) {
-    std::vector<float> B_y(Ny / 2, 0.0f);
-    std::vector<float> B_x(Nx / 2, 0.0f);
+void compute_and_save_correlation(const std::vector<double>& h_u, int Nx, int Ny) {
+    std::vector<double> B_y(Ny / 2, 0.0f);
+    std::vector<double> B_x(Nx / 2, 0.0f);
 
     std::cout << "Computing correlation functions on Host..." << std::endl;
 
@@ -344,20 +468,20 @@ void compute_and_save_correlation(const std::vector<float>& h_u, int Nx, int Ny)
         double sum = 0.0;
         for (int x = 0; x < Nx; ++x)
             for (int y = 0; y < Ny; ++y) {
-                float diff = h_u[x * Ny + y] - h_u[x * Ny + ((y + dy) % Ny)];
+                double diff = h_u[x * Ny + y] - h_u[x * Ny + ((y + dy) % Ny)];
                 sum += diff * diff;
             }
-        B_y[dy] = static_cast<float>(sum / (Nx * Ny));
+        B_y[dy] = static_cast<double>(sum / (Nx * Ny));
     }
 
     for (int dx = 0; dx < Nx / 2; ++dx) {
         double sum = 0.0;
         for (int x = 0; x < Nx; ++x)
             for (int y = 0; y < Ny; ++y) {
-                float diff = h_u[x * Ny + y] - h_u[((x + dx) % Nx) * Ny + y];
+                double diff = h_u[x * Ny + y] - h_u[((x + dx) % Nx) * Ny + y];
                 sum += diff * diff;
             }
-        B_x[dx] = static_cast<float>(sum / (Nx * Ny));
+        B_x[dx] = static_cast<double>(sum / (Nx * Ny));
     }
 
     std::ofstream outfile("bragg_glass_thermal_output.dat");
@@ -373,6 +497,7 @@ void compute_and_save_correlation(const std::vector<float>& h_u, int Nx, int Ny)
 }
 
 // ─────────────────────────────── MAIN ────────────────────────────────────────
+
 
 int main(int argc, char* argv[]) {
     // Usage:
@@ -401,7 +526,8 @@ int main(int argc, char* argv[]) {
 
     // CLI seed always wins — run the same config with different seeds
     // without editing the file.
-    p.seed = static_cast<unsigned int>(std::atoi(argv[1]));
+    p.seedD = static_cast<unsigned int>(std::atoi(argv[1]));
+    p.seedT = static_cast<unsigned int>(std::atoi(argv[2]));
 
     const int n_steps = 1000000;
 
@@ -414,7 +540,8 @@ int main(int argc, char* argv[]) {
               << "  dt         : " << p.dt << "\n"
               << "  kBT        : " << p.kBT << "\n"
               << "  rf         : " << p.rf << "\n"
-              << "  seed       : " << p.seed << "\n";
+              << "  seedD       : " << p.seedD << "\n"
+              << "  seedT       : " << p.seedT << "\n";
 #ifndef LARKIN
     std::cout << "  Disorder   : Piecewise-constant pinning (rf = " << p.rf << ")\n";
 #else
@@ -429,6 +556,40 @@ int main(int argc, char* argv[]) {
     // ── Build the physical system ─────────────────────────────────────────────
     CoupledElasticChains system(p);
 
+
+    /* // first test with one replica to make sure everything works, then we can easily extend to multiple replicas for parallel tempering by just adding more instances to this vector.
+    std::vector<CoupledElasticChains*> replicas;
+    replicas.push_back(&system); // For now we just run one replica, but this design allows easy extension to multiple replicas for parallel tempering.
+    */
+
+
+    //#####################################################################################
+    // second test with multiple replicas to make sure our memory management is robust and we can easily extend to parallel tempering.
+    int n_replicas = 8; // Define how many replicas you want in your temperature ladder    
+    // 1. Change your vector to hold unique_ptrs instead of dangerous raw pointers
+    std::vector<std::unique_ptr<CoupledElasticChains>> replicas;
+    // Optimization: Reserve memory upfront to avoid vector reallocation overhead
+    replicas.reserve(n_replicas);
+    double T_min = 0.1; // Minimum temperature for the ladder
+    double T_max = 1.0; // Maximum temperature for the ladder
+    double delta_T = (T_max - T_min) / (n_replicas - 1); // Temperature step size for a linear ladder. For geometric, use T_i = T_min * (T_max / T_min)^(i / (n_replicas - 1))
+    // 2. Populate the ladder
+    for (int i = 0; i < n_replicas; ++i) {
+        // Calculate a geometric or linear temperature distribution for Parallel Tempering
+        double t_i = T_min + i * delta_T;
+    
+        // Update the temperature in the parameters for this replica
+        p.kBT = t_i; 
+        
+        // Create a unique seed for each replica's stochastic thermal noise
+        p.seedT = static_cast<unsigned int>(std::atoi(argv[1])) + i * 1000; // Ensure different thermal noise patterns across replicas
+
+        // std::make_unique perfectly forwards these arguments to the CoupledElasticChains constructor
+        replicas.push_back(std::make_unique<CoupledElasticChains>(p));
+    }
+    //#####################################################################################
+
+
     std::cout << "Noise scale: " << system.noiseScale() << "\n";
     std::cout << "Running simulation...\n";
 
@@ -440,7 +601,7 @@ int main(int argc, char* argv[]) {
     }
 
     // ── Copy result to host & analyse ─────────────────────────────────────────
-    std::vector<float> h_u;
+    std::vector<double> h_u;
     system.copyToHost(h_u);
 
     // Save parameters file
@@ -453,7 +614,8 @@ int main(int argc, char* argv[]) {
                << "kBT: "          << p.kBT << "\n"
                << "noise_scale: "  << system.noiseScale() << "\n"
                << "rf: "           << p.rf << "\n"
-               << "seed: "         << p.seed << "\n";
+               << "seedT: "         << p.seedT << "\n"
+               << "seedD: "         << p.seedD << "\n";
 #ifndef LARKIN
     param_file << "Disorder: Piecewise-constant pinning\n";
 #else
@@ -472,3 +634,5 @@ int main(int argc, char* argv[]) {
 
     return 0;
 }
+
+

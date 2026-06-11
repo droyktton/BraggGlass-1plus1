@@ -6,6 +6,7 @@ dt: 0.01
 kBT: 0.5
 noise_scale: 0.1
 rf: 100
-seed: 1234
+seedT: 0
+seedD: 1234
 Disorder: Piecewise-constant pinning
 Exclusion: Hardcore
