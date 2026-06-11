@@ -6,6 +6,14 @@ a=$(echo "1234+$1" | bc -l)
 for((seed=1234;seed<$a;seed++))
 do 
 	./coupled_chains_sim $seed --params params.ini 
-	mv displacement_spectra.dat "displacement_spectra_"$seed".dat"
-	mv bragg_glass_thermal_output.dat "bragg_glass_thermal_output_"$seed".dat"
+
+	for file in displacement_spectra_replica_*.dat
+	do
+		mv $file "seed_"$seed"_"$file 
+	done
+
+	for file in correlation_replica_*.dat
+	do
+		mv $file "seed_"$seed"_"$file 
+	done
 done

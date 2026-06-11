@@ -13,7 +13,9 @@
 #include <thrust/reduce.h>
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
-
+#include <fstream>
+#include <sstream>
+#include <iomanip>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846f
@@ -401,7 +403,7 @@ private:
 
 // ────────────────────────── ANALYSIS FUNCTIONS ───────────────────────────────
 
-void compute_and_save_displacement_spectra(const std::vector<double>& h_u, int Nx, int Ny) {
+void compute_and_save_displacement_spectra(const std::vector<double>& h_u, int Nx, int Ny, std::ofstream &outfile) {
     int num_modes = Ny / 2 + 1;
     std::vector<double> S_u(num_modes, 0.0);
 
@@ -419,7 +421,7 @@ void compute_and_save_displacement_spectra(const std::vector<double>& h_u, int N
         }
     }
 
-    std::ofstream outfile("displacement_spectra.dat");
+    //std::ofstream outfile("displacement_spectra.dat");
     outfile << "# k    qy    S_u(qy)\n";
     for (int k = 1; k < num_modes; ++k) {
         double qy      = 2.0 * M_PI * k / Ny;
@@ -429,7 +431,7 @@ void compute_and_save_displacement_spectra(const std::vector<double>& h_u, int N
     outfile.close();
 }
 
-void compute_and_save_structure_factor(const std::vector<double>& h_u, int Nx, int Ny) {
+void compute_and_save_structure_factor(const std::vector<double>& h_u, int Nx, int Ny, std::ofstream &outfile) {
     int num_modes = Ny / 2 + 1;
     std::vector<double> S_avg(num_modes, 0.0);
 
@@ -447,7 +449,7 @@ void compute_and_save_structure_factor(const std::vector<double>& h_u, int Nx, i
         }
     }
 
-    std::ofstream outfile("structure_factor_output.dat");
+    //std::ofstream outfile("structure_factor_output.dat");
     outfile << "# k    qy    S(qy)\n";
     for (int k = 0; k < num_modes; ++k) {
         double qy      = 2.0 * M_PI * k / Ny;
@@ -458,7 +460,7 @@ void compute_and_save_structure_factor(const std::vector<double>& h_u, int Nx, i
     std::cout << "Structure factor exported to 'structure_factor_output.dat'" << std::endl;
 }
 
-void compute_and_save_correlation(const std::vector<double>& h_u, int Nx, int Ny) {
+void compute_and_save_correlation(const std::vector<double>& h_u, int Nx, int Ny, std::ofstream &outfile) {
     std::vector<double> B_y(Ny / 2, 0.0f);
     std::vector<double> B_x(Nx / 2, 0.0f);
 
@@ -484,7 +486,7 @@ void compute_and_save_correlation(const std::vector<double>& h_u, int Nx, int Ny
         B_x[dx] = static_cast<double>(sum / (Nx * Ny));
     }
 
-    std::ofstream outfile("bragg_glass_thermal_output.dat");
+    //std::ofstream outfile("bragg_glass_thermal_output.dat");
     outfile << "# r    B_y(Along Chain)    B_x(Across Chains)\n";
     int max_r = std::max(Nx / 2, Ny / 2);
     for (int r = 0; r < max_r; ++r) {
@@ -562,8 +564,8 @@ int main(int argc, char* argv[]) {
     std::vector<std::unique_ptr<CoupledElasticChains>> replicas;
     // Optimization: Reserve memory upfront to avoid vector reallocation overhead
     replicas.reserve(n_replicas);
-    double T_min = 0.01; // Minimum temperature for the ladder
-    double T_max = p.kBT; // Maximum temperature for the ladder
+    double T_min = p.kBT; // Minimum temperature for the ladder
+    double T_max = 1.0; // Maximum temperature for the ladder
     double delta_T = (T_max - T_min) / (n_replicas - 1); // Temperature step size for a linear ladder. For geometric, use T_i = T_min * (T_max / T_min)^(i / (n_replicas - 1))
     // 2. Populate the ladder
     for (int i = 0; i < n_replicas; ++i) {
@@ -596,7 +598,28 @@ int main(int argc, char* argv[]) {
     // ── Copy result to host & analyse ─────────────────────────────────────────
     std::vector<double> h_u;
     //system.copyToHost(h_u);
-    replicas[0]->copyToHost(h_u); // For now we just run one replica, but this design allows easy extension to multiple replicas for parallel tempering.
+   
+
+    for (int i = 0; i < n_replicas; ++i) {
+        std::stringstream ssS, ssB;
+        
+        // Generates names like: displacement_spectra_replica_0.dat
+        ssS << "displacement_spectra_replica_" << i << ".dat";        
+        std::string filename_S = ssS.str();
+        std::ofstream outfile_S(filename_S);
+        
+        ssB << "correlation_replica_" << i << ".dat";
+        std::string filename_B = ssB.str();
+        std::ofstream outfile_B(filename_B);
+
+        if (outfile_S.is_open() && outfile_B.is_open()) 
+        {
+            replicas[i]->copyToHost(h_u); 
+            compute_and_save_correlation(h_u, p.Nx, p.Ny, outfile_B);
+            compute_and_save_displacement_spectra(h_u, p.Nx, p.Ny, outfile_S);
+        }
+    }
+
 
     // Save parameters file
     std::ofstream param_file("simulation_parameters.txt");
@@ -621,9 +644,7 @@ int main(int argc, char* argv[]) {
 #endif
     param_file.close();
 
-    compute_and_save_correlation(h_u, p.Nx, p.Ny);
-    // compute_and_save_structure_factor(h_u, p.Nx, p.Ny);
-    compute_and_save_displacement_spectra(h_u, p.Nx, p.Ny);
+    
 
     return 0;
 }
