@@ -558,7 +558,7 @@ int main(int argc, char* argv[]) {
     // ── Build the physical system ─────────────────────────────────────────────
     // CoupledElasticChains system(p);
 
-    int n_replicas = 2; // Define how many replicas you want in your temperature ladder    
+    int n_replicas = 5; // Define how many replicas you want in your temperature ladder    
     // 1. Change your vector to hold unique_ptrs instead of dangerous raw pointers
     std::vector<std::unique_ptr<CoupledElasticChains>> replicas;
     // Optimization: Reserve memory upfront to avoid vector reallocation overhead
