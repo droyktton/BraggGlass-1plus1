@@ -563,9 +563,16 @@ int main(int argc, char* argv[]) {
     std::vector<std::unique_ptr<CoupledElasticChains>> replicas;
     // Optimization: Reserve memory upfront to avoid vector reallocation overhead
     replicas.reserve(n_replicas);
+
     double T_min = p.kBT; // Minimum temperature for the ladder
     double T_max = 1.0; // Maximum temperature for the ladder
-    double delta_T = (T_max - T_min) / (n_replicas - 1); // Temperature step size for a linear ladder. For geometric, use T_i = T_min * (T_max / T_min)^(i / (n_replicas - 1))
+    double delta_T ;
+    if(n_replicas > 1) {
+        delta_T = (T_max - T_min) / (n_replicas - 1);
+    } else {
+        delta_T = 0;
+    }
+   
     // 2. Populate the ladder
     for (int i = 0; i < n_replicas; ++i) {
         // Calculate a geometric or linear temperature distribution for Parallel Tempering
@@ -588,8 +595,9 @@ int main(int argc, char* argv[]) {
     // ── Main loop ─────────────────────────────────────────────────────────────
     for (int step = 0; step < n_steps; ++step) {
         //system.step();
-        replicas[0]->step(); // For now we just run one replica, but this design allows easy extension to multiple replicas for parallel tempering.
-        replicas[1]->step(); // For now we just run one replica, but this design allows easy extension to multiple replicas for parallel tempering.
+        for (int i = 0; i < n_replicas; ++i) {
+            replicas[i]->step();
+        }
         if (step % 1000 == 0)
             std::cout << "Step " << step << " / " << n_steps << "\n";
     }
