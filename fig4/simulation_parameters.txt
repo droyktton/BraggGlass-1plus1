@@ -3,10 +3,10 @@ Time Steps: 1000000
 cx, cy: 1, 1
 V0: 0.1
 dt: 0.01
-kBT: 1
-rf: 512
-seedT: 5241
-seedD: 1241
+kBT: 0.01
+rf: 256
+seedT: 1234
+seedD: 1243
+Replicas: 5
 Disorder: Piecewise-constant pinning
 Exclusion: Hardcore
-Replicas: 5

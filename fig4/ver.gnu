@@ -8,7 +8,7 @@ set logs
 set xla 'q'
 set yla 'q^2 <|u(q)|^2>'
 
-nreplicas=3
+#nreplicas=3
 
 plot [:5][:] for[r=0:nreplicas-1] \
 sprintf("< cat seed_*_displacement_spectra_replica_%d.dat | sort -n -k 1",r) u 2:($2**2*$3*512) smooth un w lp t 'sim', \
