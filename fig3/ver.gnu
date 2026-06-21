@@ -1,6 +1,6 @@
 set multi lay 2,1
 
-set tit 'Nz=32, Nx=1024'
+set tit 'Nz=32, Nx=512'
 
 set key left
 set logs

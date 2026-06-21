@@ -36,16 +36,16 @@
 #define PHILOX_OFFSET 10000000
 
 __device__ double get_piecewise_pinning_force(unsigned int idx, unsigned int u_block,
-                                              double V0, unsigned int seed) {
+                                              double V0, unsigned int seedD) {
     curandStatePhilox4_32_10_t state;
-    curand_init(seed, idx, u_block, &state);
+    curand_init(seedD, idx, u_block, &state);
     return -V0 + 2.0f * V0 * curand_uniform(&state);
 }
 
 __device__ double quenched_random_force(unsigned int x, unsigned int y,
-                                        double V0, unsigned int seed) {
+                                        double V0, unsigned int seedD) {
     curandStatePhilox4_32_10_t state;
-    curand_init(seed, y, x, &state);
+    curand_init(seedD, y, x, &state);
     return -V0 + 2.0f * V0 * curand_uniform(&state);
 }
 
@@ -500,6 +500,9 @@ void compute_and_save_correlation(const std::vector<double>& h_u, int Nx, int Ny
 
 // ─────────────────────────────── MAIN ────────────────────────────────────────
 
+#ifndef NREPLICAS
+#define NREPLICAS 1
+#endif
 
 int main(int argc, char* argv[]) {
     // Usage:
@@ -554,11 +557,17 @@ int main(int argc, char* argv[]) {
 #else
     std::cout << "  Exclusion  : None\n";
 #endif
+#ifndef NREPLICAS
+    std::cout << "  Replicas   : 1\n";
+#else
+    std::cout << "  Replicas   : " << NREPLICAS << "\n";
+#endif
+
 
     // ── Build the physical system ─────────────────────────────────────────────
     // CoupledElasticChains system(p);
 
-    int n_replicas = 5; // Define how many replicas you want in your temperature ladder    
+    int n_replicas = NREPLICAS; // Define how many replicas you want in your temperature ladder    
     // 1. Change your vector to hold unique_ptrs instead of dangerous raw pointers
     std::vector<std::unique_ptr<CoupledElasticChains>> replicas;
     // Optimization: Reserve memory upfront to avoid vector reallocation overhead
@@ -588,23 +597,65 @@ int main(int argc, char* argv[]) {
         replicas.push_back(std::make_unique<CoupledElasticChains>(p));
     }
 
-
-    //std::cout << "Noise scale: " << system.noiseScale() << "\n";
     std::cout << "Running simulation...\n";
 
     // ── Main loop ─────────────────────────────────────────────────────────────
-    for (int step = 0; step < n_steps; ++step) {
-        //system.step();
-        for (int i = 0; i < n_replicas; ++i) {
+    int swap_interval = 100; // How often to attempt replica swaps
+    std::mt19937 swap_gen(54321);
+    std::uniform_real_distribution<double> uniform_dist(0.0, 1.0);
+
+    for (int step = 0; step < n_steps; ++step) 
+    {
+
+        for (int i = 0; i < n_replicas; ++i) 
+        {
             replicas[i]->step();
         }
+
+        // 2. Periodically attempt temperature swaps
+        if (step > 0 && step % swap_interval == 0) 
+        {    
+            // Alternate starting index between 0 (even) and 1 (odd) to allow global diffusion
+            int start_idx = ((step / swap_interval) % 2 == 0) ? 0 : 1;
+
+            for (int i = start_idx; i < n_replicas - 1; i += 2) {
+                int j = i + 1; // Neighboring replica
+
+                // Fetch current thermodynamic attributes
+                double T_i = replicas[i]->get_kBT();
+                double T_j = replicas[j]->get_kBT();
+
+                // Run GPU reductions to get configurational energies
+                double E_i = replicas[i]->compute_configurational_energy();
+                double E_j = replicas[j]->compute_configurational_energy();
+
+                // Compute Metropolis-Hastings argument
+                double delta_beta = (1.0 / T_i) - (1.0 / T_j);
+                double delta_E = E_i - E_j;
+                double arg = delta_beta * delta_E;
+
+                // Accept if it reduces energy/entropy, or satisfies the thermal fluctuation lottery
+                if (arg >= 0.0 || uniform_dist(swap_gen) < std::exp(arg)) {
+                    
+                    // SWAP TARGET TEMPERATURES ONLY (Zero memory overhead!)
+                    replicas[i]->set_kBT(T_j);
+                    replicas[j]->set_kBT(T_i);
+                    
+                    // Optional tracking code
+                    std::cout << "[SWAP] Accepted between replica " << i << " and " << j << "\n";
+                } else {
+                    // Optional tracking code
+                    // std::cout << "[SWAP] Rejected between replica " << i << " and " << j << "\n";
+                }
+            }  
+        }        
+           
         if (step % 1000 == 0)
             std::cout << "Step " << step << " / " << n_steps << "\n";
     }
 
     // ── Copy result to host & analyse ─────────────────────────────────────────
     std::vector<double> h_u;
-    //system.copyToHost(h_u);
    
 
     for (int i = 0; i < n_replicas; ++i) {
@@ -648,6 +699,11 @@ int main(int argc, char* argv[]) {
     param_file << "Exclusion: Hardcore\n";
 #else
     param_file << "Exclusion: None\n";
+#endif
+#ifndef NREPLICAS
+    param_file << "Replicas: 1\n";
+#else
+    param_file << "Replicas: " << n_replicas << "\n";
 #endif
     param_file.close();
 
