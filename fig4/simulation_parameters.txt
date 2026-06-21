@@ -6,7 +6,7 @@ dt: 0.01
 kBT: 0.01
 rf: 256
 seedT: 1234
-seedD: 1243
-Replicas: 5
+seedD: 1235
+Replicas: 10
 Disorder: Piecewise-constant pinning
 Exclusion: Hardcore

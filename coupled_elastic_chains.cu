@@ -592,7 +592,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Running simulation...\n";
 
     // ── Main loop ─────────────────────────────────────────────────────────────
-    const int swap_interval = 10000000;
+    const int swap_interval = 100;
     std::mt19937 swap_gen(54321);
     std::uniform_real_distribution<double> uniform_dist(0.0, 1.0);
 
@@ -635,8 +635,10 @@ int main(int argc, char* argv[]) {
 
     for (int i = 0; i < n_replicas; ++i) {
         std::stringstream ssS, ssB;
-        ssS << "displacement_spectra_replica_" << i << ".dat";
-        ssB << "correlation_replica_"          << i << ".dat";
+
+        double T_i = replicas[i]->get_kBT();
+        ssS << "displacement_spectra_replica_" << T_i << ".dat";
+        ssB << "correlation_replica_"          << T_i << ".dat";
 
         std::ofstream outfile_S(ssS.str());
         std::ofstream outfile_B(ssB.str());

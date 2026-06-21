@@ -6,7 +6,7 @@
 CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/24.1/cuda
 
 nvcc -arch=sm_86 -L${CUDA_HOME}/lib64 --linker-options="-rpath,${CUDA_HOME}/lib64" \
--DHARDCORE -DNREPLICAS=5 \
+-DHARDCORE -DNREPLICAS=10 \
 -I/opt/nvidia/hpc_sdk/Linux_x86_64/24.1/math_libs/12.3/include/ \
 -L/opt/nvidia/hpc_sdk/Linux_x86_64/24.1/math_libs/ \
 coupled_elastic_chains.cu -lcurand -o coupled_chains_sim
