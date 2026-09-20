@@ -199,6 +199,9 @@ tree. Files are grouped and averaged **by temperature** (not lumped
 together across a `-DNREPLICAS>1` ladder), and each script's `--out` accepts
 any extension matplotlib supports (`.png`, `.pdf`, `.svg`, ...).
 
+See [`plotting/examples/`](plotting/examples/) for sample output from a real
+cluster run (5-replica ladder, 6 disorder seeds).
+
 ## Running on a Cluster (SLURM)
 
 See [`slurm/README.md`](slurm/README.md) and the build/submission scripts in
