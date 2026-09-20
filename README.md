@@ -20,6 +20,31 @@ Where:
 
 To navigate the highly non-convex, rugged energy landscapes typical of glassy systems, this framework implements **Replica Exchange Langevin Dynamics (Parallel Tempering)**. Multiple copies (replicas) of the system run concurrently at a ladder of distinct temperatures, swapping configurations periodically according to a Metropolis-Hastings criterion to bypass high energy barriers.
 
+### How replica exchange actually swaps temperatures
+
+All `N` replicas share the same `seedD` (same disorder realization) but
+start at different temperatures on the ladder. Every `swap_interval=100`
+steps, adjacent replicas (by array index) attempt a swap with the standard
+PT Metropolis criterion, $\min(1, e^{\Delta\beta\Delta E})$ where
+$\Delta\beta=1/T_i-1/T_j$ and $\Delta E$ is their configurational energy
+difference. What actually gets exchanged is **only the temperature label**
+(`set_kBT`) — not the `u` field. This is mathematically equivalent to
+swapping the full configurations, *because* all replicas share one
+disorder realization: relabeling which configuration sits at which
+temperature achieves the identical statistical effect as moving the
+configuration itself, without copying GPU arrays.
+
+The consequence: a replica object's temperature is **not fixed** over the
+run — it changes at every accepted swap. What evolves continuously in each
+replica slot is the *configuration*, under whatever temperature currently
+happens to be assigned to it; a configuration can wander up to a high
+temperature, cross an energy barrier that would be impassable at low $T$,
+and come back down better equilibrated. Because swaps only ever exchange
+the same fixed set of `N` ladder values (never introduce a new one), it's
+possible — and this code does it — to track observables by *which ladder
+temperature a replica currently holds* rather than by replica index; see
+the time-averaging note in [Output Files](#output-files).
+
 ### Geometry: what `x`, `y`, and `u` actually mean
 
 `u(x,y)` is a **transverse** displacement, in the same direction/units as
@@ -129,20 +154,51 @@ cluster), list the target architectures explicitly instead — see
 | `V0` | Pinning strength | 0.1 |
 | `dt` | Langevin time step | 0.01 |
 | `rf` | Disorder correlation length (piecewise-constant pinning only, ignored with `-DLARKIN`) | 10.0 |
-| `kBT` | Temperature of the base (`seedD`/`seedT`) replica; with `-DNREPLICAS=N>1` this is the low end of a ladder that runs up to `kBT=1.0` | 0.5 |
+| `kBT` | Temperature of the base (`seedD`/`seedT`) replica; with `-DNREPLICAS=N>1` this is the low end ($T_{\min}$) of a ladder up to `kBT=1.0` ($T_{\max}$) | 0.5 |
 | `seedD`, `seedT` | Overridden by the CLI arguments if both are given | 42 |
 
 The number of Langevin steps (`n_steps = 1,000,000`) and the temperature
 ladder's upper bound (`T_max = 1.0`) are currently compiled in (`main()` in
 `coupled_elastic_chains.cu`), not configurable via `params.ini`.
 
+The ladder is **geometric** (log-uniform), not linear:
+$T_i = T_{\min}\,(T_{\max}/T_{\min})^{i/(N-1)}$ for $i=0,\dots,N{-}1$. Linear
+spacing makes the swap acceptance between adjacent replicas collapse at low
+$T$ ($\Delta\beta = 1/T_i - 1/T_{i+1} \sim \Delta T/T^2$ diverges as
+$T\to 0$ for fixed $\Delta T$ — exactly where a glassy system needs replica
+exchange working best), and it wastes replicas: with `kBT=0.01` and 5
+replicas, linear spacing gives $0.01, 0.26, 0.51, 0.76, 1$ — four of five
+points bunched above $T=0.5$. The geometric ladder instead gives
+$0.01, 0.032, 0.1, 0.316, 1$, spending replicas proportionally across each
+decade of $T$.
+
 ### Output Files
 
-At the end of the run, each replica's final displacement field `u(x,y)` is
-copied to the host and reduced to diagnostics along **both** axes (see
+Diagnostics are reduced along **both** axes (see
 [Geometry](#geometry-what-x-y-and-u-actually-mean) for why they measure
-different physics). Per replica, files are named by that replica's *final*
-temperature `T`, after any parallel-tempering swaps.
+different physics), and reported per **temperature** rather than per
+replica object — replica exchange relabels which replica holds which
+temperature throughout the run (see
+[How replica exchange actually swaps temperatures](#how-replica-exchange-actually-swaps-temperatures)
+below), so a fixed "replica slot" doesn't correspond to a fixed $T$.
+
+**Time-averaged, not a single snapshot.** After a burn-in of the first 10%
+of steps (`burn_in = n_steps/10`), the code samples every replica's current
+configuration every `sample_interval = 1000` steps (~900 samples per
+temperature over the full run), and accumulates each diagnostic — indexed
+by whichever ladder temperature that replica currently holds, not by
+replica object index — into a running average. This is a large reduction
+in noise over a single end-of-run snapshot, especially visible for the
+exact (non-linear) $S_\rho$ near the Bragg peak. `burn_in` and
+`sample_interval` are compiled-in constants, not yet exposed via
+`params.ini`.
+
+The plain final-snapshot diagnostics (one configuration, no time
+averaging — what earlier versions of this code exported) are **also**
+written, under a `snapshot_` prefix (e.g.
+`snapshot_transverse_structure_factor_replica_<T>.dat`), purely so you can
+compare the two directly. The `plotting/` scripts and `ver.gnu` only look
+for the (unprefixed) time-averaged files by default.
 
 #### Along-chain (single-line roughness along `y`)
 

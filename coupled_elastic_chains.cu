@@ -400,8 +400,17 @@ private:
 
 
 // ────────────────────────── ANALYSIS FUNCTIONS ───────────────────────────────
+//
+// Each diagnostic is split into a compute_* function (pure, returns the
+// values for one snapshot) and a write_* function (formats an already
+// -averaged vector to a file). main() calls compute_* repeatedly over many
+// snapshots during the run, accumulates the results per temperature, and
+// only calls write_* once at the end on the time-averaged result -- see
+// the "TIME-AVERAGED SAMPLING" section of main() for why (a single
+// snapshot at the end is a very noisy estimate of the equilibrium value at
+// a given temperature).
 
-void compute_and_save_displacement_spectra(const std::vector<double>& h_u, int Nx, int Ny, std::ofstream& outfile) {
+std::vector<double> compute_displacement_spectrum(const std::vector<double>& h_u, int Nx, int Ny) {
     int num_modes = Ny / 2 + 1;
     std::vector<double> S_u(num_modes, 0.0);
 
@@ -418,21 +427,22 @@ void compute_and_save_displacement_spectra(const std::vector<double>& h_u, int N
             S_u[k] += std::norm(fourier_sum) / (Ny * Ny);
         }
     }
+    for (auto& v : S_u) v /= Nx;
+    return S_u;
+}
 
+void write_displacement_spectrum(const std::vector<double>& S_u, int Ny, std::ofstream& outfile) {
     outfile << "# k    qy    S_u(qy)\n";
-    for (int k = 1; k < num_modes; ++k) {
-        double qy      = 2.0 * M_PI * k / Ny;
-        double final_S = S_u[k] / Nx;
-        outfile << k << "    " << qy << "    " << final_S << "\n";
+    for (int k = 1; k < (int)S_u.size(); ++k) {
+        double qy = 2.0 * M_PI * k / Ny;
+        outfile << k << "    " << qy << "    " << S_u[k] << "\n";
     }
     outfile.close();
 }
 
-void compute_and_save_structure_factor(const std::vector<double>& h_u, int Nx, int Ny, std::ofstream& outfile) {
+std::vector<double> compute_structure_factor(const std::vector<double>& h_u, int Nx, int Ny) {
     int num_modes = Ny / 2 + 1;
     std::vector<double> S_avg(num_modes, 0.0);
-
-    std::cout << "Computing chain-averaged structure factor S(qy) on Host..." << std::endl;
 
     for (int x = 0; x < Nx; ++x) {
         for (int k = 0; k < num_modes; ++k) {
@@ -445,15 +455,17 @@ void compute_and_save_structure_factor(const std::vector<double>& h_u, int Nx, i
             S_avg[k] += std::norm(fourier_sum) / Ny;
         }
     }
+    for (auto& v : S_avg) v /= Nx;
+    return S_avg;
+}
 
+void write_structure_factor(const std::vector<double>& S, int Ny, std::ofstream& outfile) {
     outfile << "# k    qy    S(qy)\n";
-    for (int k = 0; k < num_modes; ++k) {
-        double qy      = 2.0 * M_PI * k / Ny;
-        double final_S = S_avg[k] / Nx;
-        outfile << k << "    " << qy << "    " << final_S << "\n";
+    for (int k = 0; k < (int)S.size(); ++k) {
+        double qy = 2.0 * M_PI * k / Ny;
+        outfile << k << "    " << qy << "    " << S[k] << "\n";
     }
     outfile.close();
-    std::cout << "Structure factor exported." << std::endl;
 }
 
 // The two functions above transform along y (the internal coordinate along
@@ -465,7 +477,7 @@ void compute_and_save_structure_factor(const std::vector<double>& h_u, int Nx, i
 // vortex-lattice Bragg peak lives in the Fourier transform along x, at
 // fixed y, averaged over y -- these two functions do exactly that.
 
-void compute_and_save_transverse_spectrum(const std::vector<double>& h_u, int Nx, int Ny, std::ofstream& outfile) {
+std::vector<double> compute_transverse_spectrum(const std::vector<double>& h_u, int Nx, int Ny) {
     int num_modes = Nx / 2 + 1;
     std::vector<double> S_u(num_modes, 0.0);
 
@@ -482,35 +494,36 @@ void compute_and_save_transverse_spectrum(const std::vector<double>& h_u, int Nx
             S_u[k] += std::norm(fourier_sum) / (Nx * Nx);
         }
     }
+    for (auto& v : S_u) v /= Ny;
+    return S_u;
+}
 
+void write_transverse_spectrum(const std::vector<double>& S_u, int Nx, std::ofstream& outfile) {
     outfile << "# k    qx    S_u(qx)\n";
-    for (int k = 1; k < num_modes; ++k) {
-        double qx      = 2.0 * M_PI * k / Nx;
-        double final_S = S_u[k] / Ny;
-        outfile << k << "    " << qx << "    " << final_S << "\n";
+    for (int k = 1; k < (int)S_u.size(); ++k) {
+        double qx = 2.0 * M_PI * k / Nx;
+        outfile << k << "    " << qx << "    " << S_u[k] << "\n";
     }
     outfile.close();
 }
 
-void compute_and_save_transverse_structure_factor(const std::vector<double>& h_u, int Nx, int Ny, std::ofstream& outfile) {
-    // Genuinely exact density structure factor, S_rho(q) = <|sum_x
-    // e^{iq(x+u(x,y))}|^2>/Nx, swept over the WHOLE first Brillouin zone
-    // q in [0, 2*pi] (k = 0..Nx inclusive) using the literal phase q*(x+u)
-    // -- not "q*x + 2*pi*u", which silently drops the q*u cross term and
-    // is only valid for q << 1/u. That approximation was the original,
-    // now-removed version of this function; dropping it is what fixes the
-    // spurious discontinuity between the q~0 and q~2*pi regions (they were
-    // being computed two different, inconsistent ways, stitched under a
-    // 2*pi-periodicity assumption on S_rho that is FALSE once u != 0:
-    // rho_hat(q+2*pi,y) = rho_hat(q,y) * e^{-i*2*pi*u(x,y)} != rho_hat(q,y)
-    // in general). q=0 and q=2*pi are genuinely different points -- q=0 is
-    // the trivial, disorder-independent peak (always exactly Nx, particle
-    // number conservation), q=2*pi is the informative Bragg peak -- so a
-    // real jump between them is expected physics, not a plotting bug.
+// Genuinely exact density structure factor, S_rho(q) = <|sum_x
+// e^{iq(x+u(x,y))}|^2>/Nx, swept over the WHOLE first Brillouin zone
+// q in [0, 2*pi] (k = 0..Nx inclusive) using the literal phase q*(x+u)
+// -- not "q*x + 2*pi*u", which silently drops the q*u cross term and
+// is only valid for q << 1/u. That approximation was an earlier, now
+// -removed version of this function; dropping it is what fixes a
+// spurious discontinuity between the q~0 and q~2*pi regions (they were
+// being computed two different, inconsistent ways, stitched under a
+// 2*pi-periodicity assumption on S_rho that is FALSE once u != 0:
+// rho_hat(q+2*pi,y) = rho_hat(q,y) * e^{-i*2*pi*u(x,y)} != rho_hat(q,y)
+// in general). q=0 and q=2*pi are genuinely different points -- q=0 is
+// the trivial, disorder-independent peak (always exactly Nx, particle
+// number conservation), q=2*pi is the informative Bragg peak -- so a
+// real jump between them is expected physics, not a plotting bug.
+std::vector<double> compute_transverse_structure_factor(const std::vector<double>& h_u, int Nx, int Ny) {
     int num_modes = Nx + 1;  // k = 0..Nx inclusive, closing the [0, 2*pi] interval
     std::vector<double> S_avg(num_modes, 0.0);
-
-    std::cout << "Computing y-averaged exact transverse structure factor S(qx), full zone, on Host..." << std::endl;
 
     for (int y = 0; y < Ny; ++y) {
         for (int k = 0; k < num_modes; ++k) {
@@ -523,22 +536,23 @@ void compute_and_save_transverse_structure_factor(const std::vector<double>& h_u
             S_avg[k] += std::norm(fourier_sum) / Nx;
         }
     }
-
-    outfile << "# k    qx    S(qx)\n";
-    for (int k = 0; k < num_modes; ++k) {
-        double qx      = 2.0 * M_PI * k / Nx;
-        double final_S = S_avg[k] / Ny;
-        outfile << k << "    " << qx << "    " << final_S << "\n";
-    }
-    outfile.close();
-    std::cout << "Transverse structure factor exported." << std::endl;
+    for (auto& v : S_avg) v /= Ny;
+    return S_avg;
 }
 
-void compute_and_save_correlation(const std::vector<double>& h_u, int Nx, int Ny, std::ofstream& outfile) {
+void write_transverse_structure_factor(const std::vector<double>& S, int Nx, std::ofstream& outfile) {
+    outfile << "# k    qx    S(qx)\n";
+    for (int k = 0; k < (int)S.size(); ++k) {
+        double qx = 2.0 * M_PI * k / Nx;
+        outfile << k << "    " << qx << "    " << S[k] << "\n";
+    }
+    outfile.close();
+}
+
+std::pair<std::vector<double>, std::vector<double>>
+compute_correlation(const std::vector<double>& h_u, int Nx, int Ny) {
     std::vector<double> B_y(Ny / 2, 0.0);
     std::vector<double> B_x(Nx / 2, 0.0);
-
-    std::cout << "Computing correlation functions on Host..." << std::endl;
 
     for (int dy = 0; dy < Ny / 2; ++dy) {
         double sum = 0.0;
@@ -560,15 +574,19 @@ void compute_and_save_correlation(const std::vector<double>& h_u, int Nx, int Ny
         B_x[dx] = sum / (Nx * Ny);
     }
 
+    return {B_y, B_x};
+}
+
+void write_correlation(const std::vector<double>& B_y, const std::vector<double>& B_x,
+                        int Nx, int Ny, std::ofstream& outfile) {
     outfile << "# r    B_y(Along Chain)    B_x(Across Chains)\n";
     int max_r = std::max(Nx / 2, Ny / 2);
     for (int r = 0; r < max_r; ++r) {
         outfile << r << "    ";
-        outfile << (r < Ny / 2 ? std::to_string(B_y[r]) : "nan") << "    ";
-        outfile << (r < Nx / 2 ? std::to_string(B_x[r]) : "nan") << "\n";
+        outfile << (r < (int)B_y.size() ? std::to_string(B_y[r]) : "nan") << "    ";
+        outfile << (r < (int)B_x.size() ? std::to_string(B_x[r]) : "nan") << "\n";
     }
     outfile.close();
-    std::cout << "Correlation data exported." << std::endl;
 }
 
 // ─────────────────────────────── MAIN ────────────────────────────────────────
@@ -657,15 +675,44 @@ int main(int argc, char* argv[]) {
     const unsigned int seedT_orig = p.seedT;
     const double       kBT_orig   = p.kBT;
 
-    const double T_min   = p.kBT;
-    const double T_max   = 1.0;
-    const double delta_T = (n_replicas > 1) ? (T_max - T_min) / (n_replicas - 1) : 0.0;
+    const double T_min = p.kBT;
+    const double T_max = 1.0;
+    // Geometric (log-uniform) ladder: T_i = T_min * (T_max/T_min)^(i/(N-1)).
+    // Linear spacing makes the swap acceptance between adjacent replicas
+    // collapse at low T -- Delta_beta = 1/T_i - 1/T_{i+1} ~ Delta_T/T^2
+    // diverges as T -> 0 for fixed Delta_T -- exactly where a glassy system
+    // needs replica exchange working best, and it also bunches most
+    // replicas near T_max when T_min/T_max spans a decade or more (e.g.
+    // T_min=0.01, T_max=1, N=5 linear gives 0.01, 0.26, 0.51, 0.75, 1 --
+    // only one point below 0.5). Geometric spacing keeps
+    // Delta_beta ~ (ratio-1)/T instead, roughly constant across the whole
+    // ladder, and spends replicas proportionally across decades of T.
+    const double ratio = (n_replicas > 1) ? std::pow(T_max / T_min, 1.0 / (n_replicas - 1)) : 1.0;
 
+    // ladder[s] is the fixed temperature value that always lives in "slot" s
+    // of the parallel-tempering ladder. Replica exchange only ever swaps
+    // these same n_replicas values between replica objects (see the SWAP
+    // block below) -- it never introduces a new value -- so accumulating
+    // time-averaged observables per ladder slot (found via ladder_index()
+    // on a replica's CURRENT kBT) rather than per replica object index is
+    // exactly the right way to gather statistics at a fixed temperature
+    // across the whole run, despite replicas migrating between slots.
+    std::vector<double> ladder(n_replicas);
     for (int i = 0; i < n_replicas; ++i) {
-        p.kBT  = T_min + i * delta_T;
-        p.seedT = static_cast<unsigned int>(std::atoi(argv[2])) + i * 1000u;
+        ladder[i] = T_min * std::pow(ratio, i);
+        p.kBT     = ladder[i];
+        p.seedT   = static_cast<unsigned int>(std::atoi(argv[2])) + i * 1000u;
         replicas.push_back(std::make_unique<CoupledElasticChains>(p));
     }
+    auto ladder_index = [&](double T) {
+        int best = 0;
+        double best_diff = std::fabs(ladder[0] - T);
+        for (int s = 1; s < n_replicas; ++s) {
+            double diff = std::fabs(ladder[s] - T);
+            if (diff < best_diff) { best_diff = diff; best = s; }
+        }
+        return best;
+    };
 
     std::cout << "Running simulation...\n";
 
@@ -673,6 +720,27 @@ int main(int argc, char* argv[]) {
     const int swap_interval = 100;
     std::mt19937 swap_gen(54321);
     std::uniform_real_distribution<double> uniform_dist(0.0, 1.0);
+
+    // ── TIME-AVERAGED SAMPLING ───────────────────────────────────────────────
+    // A single snapshot at the end of the run is a very noisy estimate of
+    // the equilibrium value at a given temperature. Instead, after a
+    // burn-in period, periodically sample every replica's current
+    // configuration and accumulate its diagnostics into the ladder slot
+    // matching its CURRENT temperature (not its replica index, which
+    // drifts under replica exchange -- see ladder_index() above). The
+    // final files are the time-average of ~900 decorrelated-ish snapshots
+    // per temperature instead of one.
+    const int burn_in         = n_steps / 10;   // discard the first 10% while the system thermalizes
+    const int sample_interval = 1000;           // ~900 samples per temperature over the full run
+    long long n_samples = 0;
+
+    std::vector<std::vector<double>> su_y_sum  (n_replicas, std::vector<double>(p.Ny / 2 + 1, 0.0));
+    std::vector<std::vector<double>> srho_y_sum(n_replicas, std::vector<double>(p.Ny / 2 + 1, 0.0));
+    std::vector<std::vector<double>> su_x_sum  (n_replicas, std::vector<double>(p.Nx / 2 + 1, 0.0));
+    std::vector<std::vector<double>> srho_x_sum(n_replicas, std::vector<double>(p.Nx + 1, 0.0));
+    std::vector<std::vector<double>> by_sum    (n_replicas, std::vector<double>(p.Ny / 2, 0.0));
+    std::vector<std::vector<double>> bx_sum    (n_replicas, std::vector<double>(p.Nx / 2, 0.0));
+    std::vector<double> h_u_sample;
 
     for (int step = 0; step < n_steps; ++step) {
 
@@ -704,22 +772,48 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        if (step >= burn_in && step % sample_interval == 0) {
+            for (int i = 0; i < n_replicas; ++i) {
+                int slot = ladder_index(replicas[i]->get_kBT());
+                replicas[i]->copyToHost(h_u_sample);
+
+                auto su_y = compute_displacement_spectrum(h_u_sample, p.Nx, p.Ny);
+                for (size_t k = 0; k < su_y.size(); ++k) su_y_sum[slot][k] += su_y[k];
+
+                auto srho_y = compute_structure_factor(h_u_sample, p.Nx, p.Ny);
+                for (size_t k = 0; k < srho_y.size(); ++k) srho_y_sum[slot][k] += srho_y[k];
+
+                auto su_x = compute_transverse_spectrum(h_u_sample, p.Nx, p.Ny);
+                for (size_t k = 0; k < su_x.size(); ++k) su_x_sum[slot][k] += su_x[k];
+
+                auto srho_x = compute_transverse_structure_factor(h_u_sample, p.Nx, p.Ny);
+                for (size_t k = 0; k < srho_x.size(); ++k) srho_x_sum[slot][k] += srho_x[k];
+
+                auto corr = compute_correlation(h_u_sample, p.Nx, p.Ny);
+                for (size_t r = 0; r < corr.first.size();  ++r) by_sum[slot][r] += corr.first[r];
+                for (size_t r = 0; r < corr.second.size(); ++r) bx_sum[slot][r] += corr.second[r];
+            }
+            ++n_samples;
+        }
+
         if (step % 1000 == 0)
             std::cout << "Step " << step << " / " << n_steps << "\n";
     }
 
-    // ── Copy result to host & analyse ─────────────────────────────────────────
-    std::vector<double> h_u;
+    std::cout << "Collected " << n_samples << " time-averaged samples per temperature "
+              << "(burn_in=" << burn_in << ", sample_interval=" << sample_interval << ")\n";
 
-    for (int i = 0; i < n_replicas; ++i) {
+    // ── Write time-averaged diagnostics, one file set per ladder slot ────────
+    for (int s = 0; s < n_replicas; ++s) {
+        if (n_samples == 0) break;  // burn_in >= n_steps -- nothing collected
+
+        double T_s = ladder[s];
         std::stringstream ssS, ssB, ssRho, ssTS, ssTRho;
-
-        double T_i = replicas[i]->get_kBT();
-        ssS    << "displacement_spectra_replica_"  << T_i << ".dat";
-        ssB    << "correlation_replica_"           << T_i << ".dat";
-        ssRho  << "structure_factor_replica_"      << T_i << ".dat";
-        ssTS   << "transverse_spectrum_replica_"   << T_i << ".dat";
-        ssTRho << "transverse_structure_factor_replica_" << T_i << ".dat";
+        ssS    << "displacement_spectra_replica_"  << T_s << ".dat";
+        ssB    << "correlation_replica_"           << T_s << ".dat";
+        ssRho  << "structure_factor_replica_"      << T_s << ".dat";
+        ssTS   << "transverse_spectrum_replica_"   << T_s << ".dat";
+        ssTRho << "transverse_structure_factor_replica_" << T_s << ".dat";
 
         std::ofstream outfile_S(ssS.str());
         std::ofstream outfile_B(ssB.str());
@@ -729,12 +823,47 @@ int main(int argc, char* argv[]) {
 
         if (outfile_S.is_open() && outfile_B.is_open() && outfile_Rho.is_open()
                 && outfile_TS.is_open() && outfile_TRho.is_open()) {
-            replicas[i]->copyToHost(h_u);
-            compute_and_save_correlation(h_u, p.Nx, p.Ny, outfile_B);
-            compute_and_save_displacement_spectra(h_u, p.Nx, p.Ny, outfile_S);
-            compute_and_save_structure_factor(h_u, p.Nx, p.Ny, outfile_Rho);
-            compute_and_save_transverse_spectrum(h_u, p.Nx, p.Ny, outfile_TS);
-            compute_and_save_transverse_structure_factor(h_u, p.Nx, p.Ny, outfile_TRho);
+            auto average = [&](std::vector<double> v) {
+                for (auto& x : v) x /= static_cast<double>(n_samples);
+                return v;
+            };
+            write_displacement_spectrum(average(su_y_sum[s]), p.Ny, outfile_S);
+            write_correlation(average(by_sum[s]), average(bx_sum[s]), p.Nx, p.Ny, outfile_B);
+            write_structure_factor(average(srho_y_sum[s]), p.Ny, outfile_Rho);
+            write_transverse_spectrum(average(su_x_sum[s]), p.Nx, outfile_TS);
+            write_transverse_structure_factor(average(srho_x_sum[s]), p.Nx, outfile_TRho);
+        }
+    }
+
+    // ── Also keep the plain final-snapshot diagnostics (same quantities,
+    //    from the single configuration at the very end of the run, as
+    //    opposed to time-averaged over n_samples of them above) under a
+    //    "snapshot_" prefix, so the two can be compared directly. ─────────
+    std::vector<double> h_u_final;
+    for (int i = 0; i < n_replicas; ++i) {
+        double T_i = replicas[i]->get_kBT();
+        std::stringstream ssS, ssB, ssRho, ssTS, ssTRho;
+        ssS    << "snapshot_displacement_spectra_replica_"       << T_i << ".dat";
+        ssB    << "snapshot_correlation_replica_"                << T_i << ".dat";
+        ssRho  << "snapshot_structure_factor_replica_"           << T_i << ".dat";
+        ssTS   << "snapshot_transverse_spectrum_replica_"        << T_i << ".dat";
+        ssTRho << "snapshot_transverse_structure_factor_replica_" << T_i << ".dat";
+
+        std::ofstream outfile_S(ssS.str());
+        std::ofstream outfile_B(ssB.str());
+        std::ofstream outfile_Rho(ssRho.str());
+        std::ofstream outfile_TS(ssTS.str());
+        std::ofstream outfile_TRho(ssTRho.str());
+
+        if (outfile_S.is_open() && outfile_B.is_open() && outfile_Rho.is_open()
+                && outfile_TS.is_open() && outfile_TRho.is_open()) {
+            replicas[i]->copyToHost(h_u_final);
+            auto corr = compute_correlation(h_u_final, p.Nx, p.Ny);
+            write_correlation(corr.first, corr.second, p.Nx, p.Ny, outfile_B);
+            write_displacement_spectrum(compute_displacement_spectrum(h_u_final, p.Nx, p.Ny), p.Ny, outfile_S);
+            write_structure_factor(compute_structure_factor(h_u_final, p.Nx, p.Ny), p.Ny, outfile_Rho);
+            write_transverse_spectrum(compute_transverse_spectrum(h_u_final, p.Nx, p.Ny), p.Nx, outfile_TS);
+            write_transverse_structure_factor(compute_transverse_structure_factor(h_u_final, p.Nx, p.Ny), p.Nx, outfile_TRho);
         }
     }
 
@@ -749,7 +878,10 @@ int main(int argc, char* argv[]) {
                << "rf: "         << p.rf << "\n"
                << "seedT: "      << seedT_orig << "\n"
                << "seedD: "      << seedD_orig << "\n"
-               << "Replicas: "   << n_replicas << "\n";
+               << "Replicas: "   << n_replicas << "\n"
+               << "BurnIn: "     << burn_in << "\n"
+               << "SampleInterval: " << sample_interval << "\n"
+               << "NSamples: "   << n_samples << "\n";
 #ifndef LARKIN
     param_file << "Disorder: Piecewise-constant pinning\n";
 #else
