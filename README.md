@@ -282,11 +282,16 @@ a regular lattice, or has it molten?
   stitched). It's smooth and self-averaging (unlike the exact curve near
   $q=2\pi$), being linear rather than exponentially sensitive in `u`.
   The along-chain analogues (`plot_structure_factor_q0.py` /
-  `plot_structure_factor.py` / `plot_structure_factor_full.py`) exist too,
-  for the (different!) single-line-roughness question — that one's $Q=0$
-  branch needs the analogous $N_y$ factor,
-  $S_\rho^{(Q=0)}(q) = 4N_y\sin^2(q/2)\,S_u(q)$, matching `ver.gnu`'s
-  original `q^2*S_u(q)*Ny` convention on the Displacement spectrum panel.
+  `plot_structure_factor.py`) exist too, for the (different!)
+  single-line-roughness question — that one's $Q=0$ branch needs the
+  analogous $N_y$ factor, $S_\rho^{(Q=0)}(q) = 4N_y\sin^2(q/2)\,S_u(q)$,
+  matching `ver.gnu`'s original `q^2*S_u(q)*Ny` convention on the
+  Displacement spectrum panel. There's no along-chain equivalent of
+  `plot_transverse_structure_factor_full.py`: unlike the transverse
+  quantity, `compute_structure_factor()`'s phase (`qy*y + 2*pi*u(x,y)`)
+  never multiplies `u` by `qy`, so it *is* exactly $2\pi$-periodic in
+  `qy` — `plot_structure_factor.py`'s `k = 0..Ny/2` already covers all the
+  physically distinct information, with no zone to stitch.
 
 #### Both axes together
 
@@ -345,9 +350,8 @@ python plotting/plot_all.py --nx 32 --ny 64 --dir . --out plots/diagnostics.png
 
 # Along-chain (single-line roughness, y-axis):
 python plotting/plot_spectrum.py --ny 64 --dir .                          # S_u(qy) only
-python plotting/plot_structure_factor_full.py --ny 64 --dir .             # S_rho(q), full zone (Q=0 approx -> Bragg peak)
-python plotting/plot_structure_factor_q0.py --ny 64 --dir .               # S_rho near Q=0 only (approx, from S_u)
-python plotting/plot_structure_factor.py --ny 64 --dir .                  # S_rho near Bragg peak only (exact) + DW estimate
+python plotting/plot_structure_factor_q0.py --ny 64 --dir .               # S_rho near Q=0 (approx, from S_u)
+python plotting/plot_structure_factor.py --ny 64 --dir .                  # S_rho(qy), exact -- already the full picture, see note above
 
 # Transverse (vortex-lattice translational order, x-axis -- the actual Bragg-glass question):
 python plotting/plot_transverse_structure_factor_full.py --nx 32 --dir .  # S_rho(q), full zone (exact) + both approximations

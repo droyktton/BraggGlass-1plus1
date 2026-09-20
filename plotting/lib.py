@@ -201,68 +201,18 @@ def plot_structure_factor(ax, directory: str, ny: int) -> bool:
     return True
 
 
-def plot_structure_factor_full(ax, directory: str, ny: int) -> bool:
-    """S_rho(q) across the whole first Brillouin zone, q in [0, 2*pi],
-    stitching the two branches above onto one q-axis instead of two
-    disconnected panels: a DFT on integer y only resolves q modulo 2*pi, so
-    the Q=0 branch's q in [0, pi] and the Bragg branch's q = 2*pi - qy in
-    [pi, 2*pi] (using S_rho(2pi+qy) = S_rho(2pi-qy)) tile the zone exactly
-    once, meeting at the zone boundary q = pi.
-
-    The two segments are NOT computed the same way -- the left one is the
-    linear-in-u approximation (exact only as q -> 0; already visibly
-    breaking down well before q = pi), the right one is the exact
-    nonlinear measurement -- so don't expect them to join smoothly. The
-    point of this plot is the vertical gap between them: how much
-    (or how little) crystalline coherence survives at q ~ 2pi relative to
-    the always-small compressional signal at q ~ 0."""
-    su_groups = find_replica_files(directory, "displacement_spectra")
-    rho_groups = find_replica_files(directory, "structure_factor")
-    if not su_groups or not rho_groups:
-        return False
-
-    corr_groups = find_replica_files(directory, "correlation")
-    dw_labeled = False
-
-    for color, T in zip(sequential_colors(len(su_groups)), su_groups):
-        if T not in rho_groups:
-            continue
-        su_data = load_averaged(su_groups[T], ncols=3)
-        q0, s0 = su_data[:, 1], 4.0 * ny * np.sin(su_data[:, 1] / 2.0)**2 * su_data[:, 2]
-
-        rho_data = load_averaged(rho_groups[T], ncols=3)
-        qy_rho, s_bragg = rho_data[:, 1], rho_data[:, 2]
-        q_bragg = 2.0 * np.pi - qy_rho
-        order = np.argsort(q_bragg)
-
-        ax.plot(q0, s0, "o-", color=color, linewidth=2, markersize=4,
-                 label=f"T={T:g} ({len(su_groups[T])} seeds)")
-        ax.plot(q_bragg[order], s_bragg[order], "o-", color=color, linewidth=2, markersize=4)
-
-        # Same Debye-Waller reconstruction as plot_structure_factor(), folded
-        # onto the q = 2pi - qy mapping used for the Bragg segment here.
-        if T in corr_groups:
-            by = load_averaged(corr_groups[T], ncols=3)[:, 1][:ny // 2]
-            n_half = len(by)
-            if n_half == ny // 2 and not np.isnan(by).any():
-                b_full = np.empty(ny)
-                b_full[:n_half] = by
-                b_full[n_half] = by[-1]
-                b_full[n_half + 1:] = by[1:][::-1]
-                s_dw = np.fft.fft(np.exp(-2.0 * np.pi**2 * b_full)).real
-                qy_dw = 2.0 * np.pi * np.arange(ny) / ny
-                mask = qy_dw <= qy_rho.max()
-                q_dw = 2.0 * np.pi - qy_dw[mask]
-                order_dw = np.argsort(q_dw)
-                ax.plot(q_dw[order_dw], s_dw[mask][order_dw], ":", color=CAT_VIOLET, linewidth=2,
-                         label=None if dw_labeled else "Debye-Waller estimate (all T)")
-                dw_labeled = True
-
-    ax.axvline(np.pi, color=BASELINE, linewidth=1, linestyle="--", zorder=0)
-    ax.set_xlabel("q")
-    ax.set_ylabel(r"$S_\rho(q)$")
-    ax.set_title(r"$S_\rho(q)$, full zone: $Q{=}0$ (approx) $\to$ Bragg peak $Q{=}2\pi$ (exact)")
-    return True
+# NOTE: there is deliberately no along-chain "plot_structure_factor_full"
+# (Q=0 branch stitched to the Bragg branch), unlike the transverse case
+# below. compute_structure_factor()'s phase is qy*y + 2*pi*u(x,y) -- qy
+# never multiplies u -- so, unlike the transverse quantity, this one IS
+# exactly 2*pi-periodic in qy (shifting qy by 2*pi leaves the phase
+# unchanged mod 2*pi since y is an integer). That means k=0..Ny/2
+# (what plot_structure_factor() already plots) covers all of the
+# physically distinct information; the rest of the zone is a mirror image,
+# not new data. An earlier version of this file stitched an approximate
+# small-q branch onto that already-complete curve anyway, which produced
+# a visible, spurious jump at q=pi -- removed rather than fixed, since
+# the stitch was never needed here in the first place.
 
 
 # ─────────────────────────────────────────────────────────────────────────
