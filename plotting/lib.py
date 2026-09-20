@@ -227,6 +227,37 @@ def plot_structure_factor(ax, directory: str, ny: int) -> bool:
 # are legitimate, complementary diagnostics, just of different physics.
 # ─────────────────────────────────────────────────────────────────────────
 
+def plot_transverse_spectrum(ax, directory: str, nx: int) -> bool:
+    """S_u^(x)(qx): Nx*q^2*<|u(q)|^2> vs q -- the transverse analogue of
+    plot_spectrum(), and the "hydrodynamic"/small-q approximation to the
+    exact S_rho(qx) (plot_transverse_structure_factor()): with the Nx
+    factor included (matching plot_spectrum()'s Ny factor -- see
+    plot_transverse_spectrum_q0() for the derivation of why it's needed
+    to land on the same scale as S_rho, not just proportional to it),
+    this curve IS the dashed "linear approx." overlay in
+    plot_transverse_structure_factor_full(), shown here on its own axes."""
+    groups = find_replica_files(directory, "transverse_spectrum")
+    if not groups:
+        return False
+
+    qx_min, qx_max = np.inf, -np.inf
+    for color, (T, paths) in zip(sequential_colors(len(groups)), groups.items()):
+        data = load_averaged(paths, ncols=3)
+        qx, su = data[:, 1], data[:, 2]
+        qx_min, qx_max = min(qx_min, qx.min()), max(qx_max, qx.max())
+        ax.plot(qx, qx**2 * su * nx, "o-", color=color, linewidth=2,
+                 markersize=5, label=f"sim, T={T:g} ({len(paths)} seeds)")
+
+    xs = np.geomspace(qx_min, qx_max, 100)
+    ax.plot(xs, 0.25 * xs, "--", color=CAT_ORANGE, linewidth=2, label="Thermal ~q")
+    ax.plot(xs, 1e-3 / xs**2, "--", color=CAT_AQUA, linewidth=2, label="Larkin ~1/q^2")
+
+    ax.set_xlabel("q")
+    ax.set_ylabel(r"$N_x\,q^2\,\langle|u(q)|^2\rangle$")
+    ax.set_title("Transverse displacement spectrum")
+    return True
+
+
 def plot_transverse_spectrum_q0(ax, directory: str, nx: int) -> bool:
     """S_rho(q) near Q=0 for the vortex lattice: 4*Nx*sin^2(q/2) * S_u^(x)(q),
     an exact rescaling of transverse_spectrum_replica_<T>.dat (the spectrum

@@ -48,13 +48,16 @@ transverse one below):
 
 ## Transverse (vortex-lattice translational order, x-axis)
 
-`plot_transverse_structure_factor_full.py`,
+`plot_transverse_spectrum.py`, `plot_transverse_structure_factor_full.py`,
 `plot_transverse_spectrum_q0.py`, `plot_transverse_structure_factor.py` —
 these are the ones that actually answer whether the vortex lattice is
-still a Bragg glass. The "full" version shows the one exact curve across
-the whole zone plus both approximations (the linear one near $q=0$, the
-Debye-Waller one near $q=2\pi$) overlaid for comparison:
+still a Bragg glass. `plot_transverse_spectrum.py` is $N_x q_x^2 S_u^{(x)}(q_x)$
+raw (the transverse analogue of `plot_spectrum.py` above); the "full"
+structure-factor version shows the one exact curve across the whole zone
+plus both approximations (that same rescaled spectrum near $q=0$, the
+Debye-Waller one near $q=2\pi$) overlaid for direct comparison:
 
+![Transverse displacement spectrum](transverse_spectrum.png)
 ![Vortex lattice density structure factor, full zone](transverse_structure_factor_full.png)
 ![Vortex lattice density structure factor near Q=0](transverse_spectrum_q0.png)
 ![Vortex lattice density structure factor, full zone with Debye-Waller overlay](transverse_structure_factor.png)

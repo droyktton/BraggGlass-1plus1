@@ -225,7 +225,12 @@ a regular lattice, or has it molten?
   averaged over `y` (`compute_and_save_transverse_spectrum`), exactly
   mirroring `displacement_spectra` with `x`/`Nx` swapped for `y`/`Ny`:
   $$S_u^{(x)}(q_x) = \frac{1}{N_y}\sum_{y=0}^{N_y-1}\frac{|\hat u_y(q_x)|^2}{N_x^2}, \qquad \hat u_y(q_x) = \sum_{x=0}^{N_x-1} u(x,y)\,e^{-iq_x x}$$
-  Columns: `k`, `qx`, `S_u(qx)`, for `k = 1 .. Nx/2`.
+  Columns: `k`, `qx`, `S_u(qx)`, for `k = 1 .. Nx/2`. Plotted raw (as
+  $N_x q_x^2 S_u^{(x)}(q_x)$, the along-$y$ convention's `plot_spectrum.py`
+  mirrored) by `plotting/plot_transverse_spectrum.py` — directly comparable
+  to $S_\rho(q_x)$ below, since this *is* its small-$q$ hydrodynamic
+  approximation once rescaled by $N_x$ (see the $Q=0$ branch derivation
+  further down).
 
 * **`transverse_structure_factor_replica_<T>.dat`** — the actual vortex-lattice
   density (Bragg-peak) structure factor, evaluated *exactly* from the raw
@@ -354,6 +359,7 @@ python plotting/plot_structure_factor_q0.py --ny 64 --dir .               # S_rh
 python plotting/plot_structure_factor.py --ny 64 --dir .                  # S_rho(qy), exact -- already the full picture, see note above
 
 # Transverse (vortex-lattice translational order, x-axis -- the actual Bragg-glass question):
+python plotting/plot_transverse_spectrum.py --nx 32 --dir .               # S_u^(x)(qx) only -- raw, Nx*q^2*S_u^(x)(q)
 python plotting/plot_transverse_structure_factor_full.py --nx 32 --dir .  # S_rho(q), full zone (exact) + both approximations
 python plotting/plot_transverse_spectrum_q0.py --nx 32 --dir .            # S_rho near Q=0 only (approx, from S_u^(x))
 python plotting/plot_transverse_structure_factor.py --nx 32 --dir .       # S_rho(q), full zone (exact) + DW estimate
