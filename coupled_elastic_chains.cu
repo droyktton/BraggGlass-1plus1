@@ -456,6 +456,84 @@ void compute_and_save_structure_factor(const std::vector<double>& h_u, int Nx, i
     std::cout << "Structure factor exported." << std::endl;
 }
 
+// The two functions above transform along y (the internal coordinate along
+// a chain's own length) -- they measure single-chain roughness/coherence,
+// not the vortex-lattice translational order. u(x,y) is a displacement in
+// the SAME direction as x (see the HARDCORE constraint in
+// update_displacements_thermal_kernel, which compares u against its
+// x-neighbors at the same y to keep chains from crossing), so the actual
+// vortex-lattice Bragg peak lives in the Fourier transform along x, at
+// fixed y, averaged over y -- these two functions do exactly that.
+
+void compute_and_save_transverse_spectrum(const std::vector<double>& h_u, int Nx, int Ny, std::ofstream& outfile) {
+    int num_modes = Nx / 2 + 1;
+    std::vector<double> S_u(num_modes, 0.0);
+
+    for (int y = 0; y < Ny; ++y) {
+        for (int k = 0; k < num_modes; ++k) {
+            std::complex<double> fourier_sum(0.0, 0.0);
+            double qx = 2.0 * M_PI * k / Nx;
+            for (int x = 0; x < Nx; ++x) {
+                double phase = qx * x;
+                fourier_sum += std::complex<double>(
+                     h_u[x * Ny + y] * std::cos(phase),
+                    -h_u[x * Ny + y] * std::sin(phase));
+            }
+            S_u[k] += std::norm(fourier_sum) / (Nx * Nx);
+        }
+    }
+
+    outfile << "# k    qx    S_u(qx)\n";
+    for (int k = 1; k < num_modes; ++k) {
+        double qx      = 2.0 * M_PI * k / Nx;
+        double final_S = S_u[k] / Ny;
+        outfile << k << "    " << qx << "    " << final_S << "\n";
+    }
+    outfile.close();
+}
+
+void compute_and_save_transverse_structure_factor(const std::vector<double>& h_u, int Nx, int Ny, std::ofstream& outfile) {
+    // Genuinely exact density structure factor, S_rho(q) = <|sum_x
+    // e^{iq(x+u(x,y))}|^2>/Nx, swept over the WHOLE first Brillouin zone
+    // q in [0, 2*pi] (k = 0..Nx inclusive) using the literal phase q*(x+u)
+    // -- not "q*x + 2*pi*u", which silently drops the q*u cross term and
+    // is only valid for q << 1/u. That approximation was the original,
+    // now-removed version of this function; dropping it is what fixes the
+    // spurious discontinuity between the q~0 and q~2*pi regions (they were
+    // being computed two different, inconsistent ways, stitched under a
+    // 2*pi-periodicity assumption on S_rho that is FALSE once u != 0:
+    // rho_hat(q+2*pi,y) = rho_hat(q,y) * e^{-i*2*pi*u(x,y)} != rho_hat(q,y)
+    // in general). q=0 and q=2*pi are genuinely different points -- q=0 is
+    // the trivial, disorder-independent peak (always exactly Nx, particle
+    // number conservation), q=2*pi is the informative Bragg peak -- so a
+    // real jump between them is expected physics, not a plotting bug.
+    int num_modes = Nx + 1;  // k = 0..Nx inclusive, closing the [0, 2*pi] interval
+    std::vector<double> S_avg(num_modes, 0.0);
+
+    std::cout << "Computing y-averaged exact transverse structure factor S(qx), full zone, on Host..." << std::endl;
+
+    for (int y = 0; y < Ny; ++y) {
+        for (int k = 0; k < num_modes; ++k) {
+            std::complex<double> fourier_sum(0.0, 0.0);
+            double qx = 2.0 * M_PI * k / Nx;
+            for (int x = 0; x < Nx; ++x) {
+                double phase = qx * (x + h_u[x * Ny + y]);
+                fourier_sum += std::complex<double>(std::cos(phase), std::sin(phase));
+            }
+            S_avg[k] += std::norm(fourier_sum) / Nx;
+        }
+    }
+
+    outfile << "# k    qx    S(qx)\n";
+    for (int k = 0; k < num_modes; ++k) {
+        double qx      = 2.0 * M_PI * k / Nx;
+        double final_S = S_avg[k] / Ny;
+        outfile << k << "    " << qx << "    " << final_S << "\n";
+    }
+    outfile.close();
+    std::cout << "Transverse structure factor exported." << std::endl;
+}
+
 void compute_and_save_correlation(const std::vector<double>& h_u, int Nx, int Ny, std::ofstream& outfile) {
     std::vector<double> B_y(Ny / 2, 0.0);
     std::vector<double> B_x(Nx / 2, 0.0);
@@ -634,22 +712,29 @@ int main(int argc, char* argv[]) {
     std::vector<double> h_u;
 
     for (int i = 0; i < n_replicas; ++i) {
-        std::stringstream ssS, ssB, ssRho;
+        std::stringstream ssS, ssB, ssRho, ssTS, ssTRho;
 
         double T_i = replicas[i]->get_kBT();
-        ssS   << "displacement_spectra_replica_" << T_i << ".dat";
-        ssB   << "correlation_replica_"          << T_i << ".dat";
-        ssRho << "structure_factor_replica_"     << T_i << ".dat";
+        ssS    << "displacement_spectra_replica_"  << T_i << ".dat";
+        ssB    << "correlation_replica_"           << T_i << ".dat";
+        ssRho  << "structure_factor_replica_"      << T_i << ".dat";
+        ssTS   << "transverse_spectrum_replica_"   << T_i << ".dat";
+        ssTRho << "transverse_structure_factor_replica_" << T_i << ".dat";
 
         std::ofstream outfile_S(ssS.str());
         std::ofstream outfile_B(ssB.str());
         std::ofstream outfile_Rho(ssRho.str());
+        std::ofstream outfile_TS(ssTS.str());
+        std::ofstream outfile_TRho(ssTRho.str());
 
-        if (outfile_S.is_open() && outfile_B.is_open() && outfile_Rho.is_open()) {
+        if (outfile_S.is_open() && outfile_B.is_open() && outfile_Rho.is_open()
+                && outfile_TS.is_open() && outfile_TRho.is_open()) {
             replicas[i]->copyToHost(h_u);
             compute_and_save_correlation(h_u, p.Nx, p.Ny, outfile_B);
             compute_and_save_displacement_spectra(h_u, p.Nx, p.Ny, outfile_S);
             compute_and_save_structure_factor(h_u, p.Nx, p.Ny, outfile_Rho);
+            compute_and_save_transverse_spectrum(h_u, p.Nx, p.Ny, outfile_TS);
+            compute_and_save_transverse_structure_factor(h_u, p.Nx, p.Ny, outfile_TRho);
         }
     }
 
