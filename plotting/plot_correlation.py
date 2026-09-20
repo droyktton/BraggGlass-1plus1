@@ -23,15 +23,16 @@ def main():
     ap.add_argument("--show", action="store_true")
     args = ap.parse_args()
 
-    fig, ax = plt.subplots(figsize=(6, 4.5), facecolor=SURFACE)
+    fig, ax = plt.subplots(figsize=(7, 4.5), facecolor=SURFACE)
     if not plot_correlation(ax, args.dir):
         raise SystemExit(f"No correlation_replica_*.dat files found under {args.dir}")
     style_axes(ax, log_x=True, log_y=True)
-    ax.legend(frameon=False, fontsize=8)
+    # Up to 2 series (B_y, B_x) per temperature plus 2 reference curves adds
+    # up fast -- no inside corner stays clean, so this legend goes outside.
+    ax.legend(frameon=False, fontsize=8, loc="upper left", bbox_to_anchor=(1.02, 1.0))
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-    fig.tight_layout()
-    fig.savefig(args.out, dpi=150, facecolor=SURFACE)
+    fig.savefig(args.out, dpi=150, facecolor=SURFACE, bbox_inches="tight")
     print(f"Wrote {args.out}")
     if args.show:
         plt.show()

@@ -123,6 +123,7 @@ def plot_structure_factor(ax, directory: str, ny: int) -> bool:
         return False
 
     corr_groups = find_replica_files(directory, "correlation")
+    dw_labeled = False  # every T's DW curve shares one color/style -- label once
 
     for color, (T, paths) in zip(sequential_colors(len(groups)), groups.items()):
         data = load_averaged(paths, ncols=3)
@@ -146,7 +147,8 @@ def plot_structure_factor(ax, directory: str, ny: int) -> bool:
                 qy_dw = 2.0 * np.pi * np.arange(ny) / ny
                 mask = qy_dw <= qy.max()
                 ax.plot(qy_dw[mask], s_dw[mask], ":", color=CAT_VIOLET, linewidth=2,
-                         label=f"Debye-Waller est., T={T:g}")
+                         label=None if dw_labeled else "Debye-Waller estimate (all T)")
+                dw_labeled = True
 
     ax.set_xlabel("q")
     ax.set_ylabel(r"$S_\rho(q)$")
