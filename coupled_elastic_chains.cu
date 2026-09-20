@@ -634,19 +634,22 @@ int main(int argc, char* argv[]) {
     std::vector<double> h_u;
 
     for (int i = 0; i < n_replicas; ++i) {
-        std::stringstream ssS, ssB;
+        std::stringstream ssS, ssB, ssRho;
 
         double T_i = replicas[i]->get_kBT();
-        ssS << "displacement_spectra_replica_" << T_i << ".dat";
-        ssB << "correlation_replica_"          << T_i << ".dat";
+        ssS   << "displacement_spectra_replica_" << T_i << ".dat";
+        ssB   << "correlation_replica_"          << T_i << ".dat";
+        ssRho << "structure_factor_replica_"     << T_i << ".dat";
 
         std::ofstream outfile_S(ssS.str());
         std::ofstream outfile_B(ssB.str());
+        std::ofstream outfile_Rho(ssRho.str());
 
-        if (outfile_S.is_open() && outfile_B.is_open()) {
+        if (outfile_S.is_open() && outfile_B.is_open() && outfile_Rho.is_open()) {
             replicas[i]->copyToHost(h_u);
             compute_and_save_correlation(h_u, p.Nx, p.Ny, outfile_B);
             compute_and_save_displacement_spectra(h_u, p.Nx, p.Ny, outfile_S);
+            compute_and_save_structure_factor(h_u, p.Nx, p.Ny, outfile_Rho);
         }
     }
 
