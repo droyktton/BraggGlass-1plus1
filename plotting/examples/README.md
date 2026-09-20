@@ -62,6 +62,14 @@ Debye-Waller one near $q=2\pi$) overlaid for direct comparison:
 ![Vortex lattice density structure factor near Q=0](transverse_spectrum_q0.png)
 ![Vortex lattice density structure factor, full zone with Debye-Waller overlay](transverse_structure_factor.png)
 
+`plot_hydro_check.py` makes the small-$q$ agreement between the exact
+$S_\rho(q)$ and the $N_x q^2 S_u^{(x)}(q)$ approximation quantitative: the
+ratio sits at $\approx 1.00$–$1.02$ at the smallest accessible $q$ for
+every temperature, and departs from 1 faster at higher $T$ (where $u$
+fluctuates more, breaking the $q\cdot u \ll 1$ assumption at smaller $q$):
+
+![Hydrodynamic approximation check](hydro_check.png)
+
 ## Displacement correlations, B(r) (both axes)
 
 ![Displacement correlations](correlation.png)

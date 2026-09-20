@@ -382,6 +382,71 @@ def plot_transverse_structure_factor_full(ax, directory: str, nx: int) -> bool:
     return True
 
 
+def plot_hydro_comparison(ax, directory: str, nx: int) -> bool:
+    """Exact S_rho(qx) (solid) overlaid with the Nx*q^2*S_u^(x)(q)
+    hydrodynamic/small-q approximation (dashed) per temperature -- the
+    same two curves as in plot_transverse_structure_factor_full(), just
+    without the Debye-Waller overlay, for a cleaner "how good is this
+    approximation" comparison. See plot_hydro_ratio() for the quantitative
+    version of the same question."""
+    rho_groups = find_replica_files(directory, "transverse_structure_factor")
+    su_groups = find_replica_files(directory, "transverse_spectrum")
+    if not rho_groups or not su_groups:
+        return False
+
+    for color, T in zip(sequential_colors(len(rho_groups)), rho_groups):
+        if T not in su_groups:
+            continue
+        rho_data = load_averaged(rho_groups[T], ncols=3)
+        qx_rho, s_rho = rho_data[:, 1], rho_data[:, 2]
+
+        su_data = load_averaged(su_groups[T], ncols=3)
+        qx_su, s_approx = su_data[:, 1], nx * su_data[:, 1]**2 * su_data[:, 2]
+
+        ax.plot(qx_rho, s_rho, "-", color=color, linewidth=2,
+                 label=f"T={T:g} ({len(rho_groups[T])} seeds)")
+        ax.plot(qx_su, s_approx, "--", color=color, linewidth=1.5, alpha=0.8)
+
+    ax.set_xlabel("q")
+    ax.set_ylabel(r"$S_\rho(q)$")
+    ax.set_title(r"Exact $S_\rho$ (solid) vs. $N_x q^2 S_u^{(x)}(q)$ (dashed)")
+    return True
+
+
+def plot_hydro_ratio(ax, directory: str, nx: int) -> bool:
+    """Ratio of the hydrodynamic approximation to the exact S_rho(qx),
+    vs q. Should sit at ~1 for the smallest accessible q (confirming the
+    Nx*q^2*S_u^(x)(q) -> S_rho(q) derivation) and depart from 1 as q
+    grows -- faster at higher T, since the approximation needs q*u << 1
+    and u fluctuates more at higher T."""
+    rho_groups = find_replica_files(directory, "transverse_structure_factor")
+    su_groups = find_replica_files(directory, "transverse_spectrum")
+    if not rho_groups or not su_groups:
+        return False
+
+    for color, T in zip(sequential_colors(len(rho_groups)), rho_groups):
+        if T not in su_groups:
+            continue
+        rho_data = load_averaged(rho_groups[T], ncols=3)
+        qx_rho, s_rho = rho_data[:, 1], rho_data[:, 2]
+
+        su_data = load_averaged(su_groups[T], ncols=3)
+        qx_su, s_approx = su_data[:, 1], nx * su_data[:, 1]**2 * su_data[:, 2]
+
+        # S_rho's native q-grid (k=0..Nx) is finer than S_u's (k=1..Nx/2);
+        # interpolate the exact curve onto the approximation's grid.
+        s_rho_interp = np.interp(qx_su, qx_rho, s_rho)
+        ratio = s_approx / s_rho_interp
+        ax.plot(qx_su, ratio, "o-", color=color, markersize=4, linewidth=1.5,
+                 label=f"T={T:g}")
+
+    ax.axhline(1.0, color=CAT_ORANGE, linewidth=1.5, linestyle=":", label="perfect approx.")
+    ax.set_xlabel("q")
+    ax.set_ylabel(r"$N_x q^2 S_u^{(x)}(q)\,/\,S_\rho(q)$")
+    ax.set_title("Approximation / exact")
+    return True
+
+
 def plot_correlation(ax, directory: str) -> bool:
     """B(r) along and across chains, against thermal/Larkin roughness scaling."""
     groups = find_replica_files(directory, "correlation")

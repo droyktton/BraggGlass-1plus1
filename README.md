@@ -363,6 +363,7 @@ python plotting/plot_transverse_spectrum.py --nx 32 --dir .               # S_u^
 python plotting/plot_transverse_structure_factor_full.py --nx 32 --dir .  # S_rho(q), full zone (exact) + both approximations
 python plotting/plot_transverse_spectrum_q0.py --nx 32 --dir .            # S_rho near Q=0 only (approx, from S_u^(x))
 python plotting/plot_transverse_structure_factor.py --nx 32 --dir .       # S_rho(q), full zone (exact) + DW estimate
+python plotting/plot_hydro_check.py --nx 32 --dir .                       # exact vs. approx. overlay + their ratio vs q
 
 python plotting/plot_correlation.py --dir .                               # B(r), both axes
 ```
