@@ -154,7 +154,8 @@ cluster), list the target architectures explicitly instead — see
 | `V0` | Pinning strength | 0.1 |
 | `dt` | Langevin time step | 0.01 |
 | `rf` | Disorder correlation length (piecewise-constant pinning only, ignored with `-DLARKIN`) | 10.0 |
-| `kBT` | Temperature of the base (`seedD`/`seedT`) replica; with `-DNREPLICAS=N>1` this is the low end ($T_{\min}$) of a ladder up to `kBT=1.0` ($T_{\max}$) | 0.5 |
+| `kBT` | Temperature of the base (`seedD`/`seedT`) replica; with `-DNREPLICAS=N>1` this is the low end ($T_{\min}$) of a ladder up to `kBT=1.0` ($T_{\max}$) — ignored if `T_list` is set | 0.5 |
+| `T_list` | Optional explicit, non-uniform ladder (comma-separated, e.g. `0.01,0.05,0.1,0.3,1.0`). Overrides both `-DNREPLICAS` and the geometric ladder; its length *is* the replica count | *(unset)* |
 | `seedD`, `seedT` | Overridden by the CLI arguments if both are given | 42 |
 
 The number of Langevin steps (`n_steps = 1,000,000`) and the temperature
@@ -171,6 +172,23 @@ replicas, linear spacing gives $0.01, 0.26, 0.51, 0.76, 1$ — four of five
 points bunched above $T=0.5$. The geometric ladder instead gives
 $0.01, 0.032, 0.1, 0.316, 1$, spending replicas proportionally across each
 decade of $T$.
+
+Even geometric spacing is only a good default when the system's swap
+difficulty is roughly uniform per decade of $T$ — measurements on this
+codebase (grep `\[SWAP\] Accepted` in a job's stdout, counted per adjacent
+pair) found that's often **not** true near an order/disorder crossover:
+going from 5 to 20 replicas over $T\in[0.01,1]$ moved the mean acceptance
+only from ~5.6% to ~7.1% (well below the ~20–40% textbook target), and
+narrowing the range to $T\in[0.1,1]$ — putting the *whole* ladder inside
+the crossover — made it *worse* (~4.2%), not better. The crossover region
+is intrinsically harder to swap through per unit of $\ln T$, no matter how
+many replicas you spread uniformly across it. For that case, `T_list` lets
+you concentrate replicas exactly where measured acceptance is lowest
+instead — a manual, one-shot version of feedback-optimized parallel
+tempering (Katzgraber, Trebst, Huse & Troyer 2006), without implementing
+the full iterative feedback loop (which additionally requires tracking
+each walker's up/down history in $T$-space to measure the local round-trip
+diffusivity, and repeating run→measure→re-space over several iterations).
 
 ### Output Files
 

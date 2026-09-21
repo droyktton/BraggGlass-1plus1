@@ -1,6 +1,7 @@
 #include <iostream>
 #include <cmath>
 #include <vector>
+#include <algorithm>
 #include <random>
 #include <fstream>
 #include <sstream>
@@ -181,6 +182,14 @@ struct SimParams {
     double       kBT  = 0.5;
     unsigned int seedD = 42u;
     unsigned int seedT = 42u;
+    // Explicit, non-uniform parallel-tempering ladder (comma-separated
+    // temperatures in params.ini, e.g. "T_list = 0.01,0.05,0.1,0.3,1.0").
+    // When given, overrides both -DNREPLICAS and the built-in geometric
+    // ladder from kBT to T_max=1.0 -- see the ladder-construction comment
+    // in main() for why you'd want this (concentrating replicas where the
+    // measured swap-acceptance rate is lowest, e.g. near an order/disorder
+    // crossover, is far more effective than uniformly adding replicas).
+    std::vector<double> T_list;
 
     /// Load parameters from a key = value file.
     /// Lines beginning with '#' and blank lines are ignored.
@@ -222,6 +231,18 @@ struct SimParams {
                 else if (key == "kBT"  ) { double       v; ss >> v; p.kBT   = v; }
                 else if (key == "seedD") { unsigned int v; ss >> v; p.seedD  = v; }
                 else if (key == "seedT") { unsigned int v; ss >> v; p.seedT  = v; }
+                else if (key == "T_list") {
+                    std::string token;
+                    ss >> token;  // comma-separated, no spaces: "0.01,0.05,0.1,1.0"
+                    std::istringstream ts(token);
+                    std::string item;
+                    p.T_list.clear();
+                    while (std::getline(ts, item, ','))
+                        p.T_list.push_back(std::stod(item));
+                    if (p.T_list.empty())
+                        throw std::runtime_error("T_list on line " + std::to_string(line_no)
+                                                 + " is empty");
+                }
                 else
                     throw std::runtime_error("Unknown parameter '" + key
                                              + "' on line " + std::to_string(line_no));
@@ -627,6 +648,11 @@ int main(int argc, char* argv[]) {
 
     const int n_steps = 1000000;
 
+    // An explicit T_list overrides -DNREPLICAS -- its length IS the
+    // replica count (see the ladder-construction comment below for why
+    // you'd want this).
+    const int n_replicas = p.T_list.empty() ? NREPLICAS : (int)p.T_list.size();
+
     // Print simulation parameters
     std::cout << "Simulation Parameters:\n"
               << "  Grid Size  : " << p.Nx << " x " << p.Ny << "\n"
@@ -648,7 +674,8 @@ int main(int argc, char* argv[]) {
 #else
     std::cout << "  Exclusion  : None\n";
 #endif
-    std::cout << "  Replicas   : " << NREPLICAS << "\n";
+    std::cout << "  Replicas   : " << n_replicas
+               << (p.T_list.empty() ? " (geometric ladder)\n" : " (explicit T_list)\n");
 
     // ── Inicializar contexto CUDA explícitamente ──────────────────────────────
     // En algunos sistemas/drivers el runtime no crea el contexto de forma lazy;
@@ -667,27 +694,12 @@ int main(int argc, char* argv[]) {
     }
 
     // ── Build replica ladder ──────────────────────────────────────────────────
-    const int n_replicas = NREPLICAS;
     std::vector<std::unique_ptr<CoupledElasticChains>> replicas;
     replicas.reserve(n_replicas);
 
     const unsigned int seedD_orig = p.seedD;
     const unsigned int seedT_orig = p.seedT;
     const double       kBT_orig   = p.kBT;
-
-    const double T_min = p.kBT;
-    const double T_max = 1.0;
-    // Geometric (log-uniform) ladder: T_i = T_min * (T_max/T_min)^(i/(N-1)).
-    // Linear spacing makes the swap acceptance between adjacent replicas
-    // collapse at low T -- Delta_beta = 1/T_i - 1/T_{i+1} ~ Delta_T/T^2
-    // diverges as T -> 0 for fixed Delta_T -- exactly where a glassy system
-    // needs replica exchange working best, and it also bunches most
-    // replicas near T_max when T_min/T_max spans a decade or more (e.g.
-    // T_min=0.01, T_max=1, N=5 linear gives 0.01, 0.26, 0.51, 0.75, 1 --
-    // only one point below 0.5). Geometric spacing keeps
-    // Delta_beta ~ (ratio-1)/T instead, roughly constant across the whole
-    // ladder, and spends replicas proportionally across decades of T.
-    const double ratio = (n_replicas > 1) ? std::pow(T_max / T_min, 1.0 / (n_replicas - 1)) : 1.0;
 
     // ladder[s] is the fixed temperature value that always lives in "slot" s
     // of the parallel-tempering ladder. Replica exchange only ever swaps
@@ -697,11 +709,42 @@ int main(int argc, char* argv[]) {
     // on a replica's CURRENT kBT) rather than per replica object index is
     // exactly the right way to gather statistics at a fixed temperature
     // across the whole run, despite replicas migrating between slots.
-    std::vector<double> ladder(n_replicas);
+    std::vector<double> ladder;
+    if (!p.T_list.empty()) {
+        // Explicit ladder from params.ini (e.g. hand-tuned after looking at
+        // measured swap-acceptance rates -- concentrate points where
+        // acceptance was lowest instead of spacing replicas uniformly in
+        // log(T), which is often far less effective near an
+        // order/disorder crossover; see README's replica-exchange section).
+        ladder = p.T_list;
+        std::sort(ladder.begin(), ladder.end());
+    } else {
+        const double T_min = p.kBT;
+        const double T_max = 1.0;
+        // Geometric (log-uniform) ladder: T_i = T_min * (T_max/T_min)^(i/(N-1)).
+        // Linear spacing makes the swap acceptance between adjacent replicas
+        // collapse at low T -- Delta_beta = 1/T_i - 1/T_{i+1} ~ Delta_T/T^2
+        // diverges as T -> 0 for fixed Delta_T -- exactly where a glassy system
+        // needs replica exchange working best, and it also bunches most
+        // replicas near T_max when T_min/T_max spans a decade or more (e.g.
+        // T_min=0.01, T_max=1, N=5 linear gives 0.01, 0.26, 0.51, 0.75, 1 --
+        // only one point below 0.5). Geometric spacing keeps
+        // Delta_beta ~ (ratio-1)/T instead, roughly constant across the whole
+        // ladder, and spends replicas proportionally across decades of T.
+        // NOTE: even this is only a good default when the system's swap
+        // difficulty is roughly uniform per decade of T -- measurements on
+        // this codebase found that's often NOT true near an order/disorder
+        // crossover (acceptance can stay low there no matter how many
+        // replicas you add uniformly), which is what T_list is for.
+        const double ratio = (n_replicas > 1) ? std::pow(T_max / T_min, 1.0 / (n_replicas - 1)) : 1.0;
+        ladder.resize(n_replicas);
+        for (int i = 0; i < n_replicas; ++i)
+            ladder[i] = T_min * std::pow(ratio, i);
+    }
+
     for (int i = 0; i < n_replicas; ++i) {
-        ladder[i] = T_min * std::pow(ratio, i);
-        p.kBT     = ladder[i];
-        p.seedT   = static_cast<unsigned int>(std::atoi(argv[2])) + i * 1000u;
+        p.kBT   = ladder[i];
+        p.seedT = static_cast<unsigned int>(std::atoi(argv[2])) + i * 1000u;
         replicas.push_back(std::make_unique<CoupledElasticChains>(p));
     }
     auto ladder_index = [&](double T) {
